@@ -75,17 +75,6 @@ class NotchWindowController: NSWindowController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    deinit {
-        cancellables.removeAll()
-    }
-
-    override func close() {
-        // 窗口关闭前立即取消订阅，避免订阅在 window 释放后继续尝试修改
-        // ignoresMouseEvents 等属性，导致新旧窗口事件路由竞争。
-        cancellables.removeAll()
-        super.close()
-    }
-
     override func showWindow(_ sender: Any?) {
         guard let window = window as? NotchPanel else {
             super.showWindow(sender)
@@ -144,12 +133,6 @@ class NotchWindowController: NSWindowController {
         else {
             // Closed or hidden — always pass through.
             window.ignoresMouseEvents = true
-            return
-        }
-
-        // 用户正在拖拽调整展开面板尺寸：保持窗口接收鼠标事件，避免光标移出内容区后拖拽被中断。
-        if viewModel.isResizingOpenedPanel {
-            window.ignoresMouseEvents = false
             return
         }
 
@@ -214,8 +197,6 @@ class NotchWindowController: NSWindowController {
                 .map { _ in () }.eraseToAnyPublisher(),
             viewModel.$presentationMode
                 .map { _ in () }.eraseToAnyPublisher(),
-            viewModel.$isResizingOpenedPanel
-                .map { _ in () }.eraseToAnyPublisher(),
         ]
 
         for publisher in auxiliaryPresentations {
@@ -224,10 +205,6 @@ class NotchWindowController: NSWindowController {
                 .sink { [weak self, weak window, weak viewModel] _ in
                     guard let self, let window, let viewModel else { return }
                     self.updateWindowPresentation(window: window, viewModel: viewModel)
-                    self.reevaluateMouseEventIgnoringAfterStatusChange(
-                        window: window,
-                        viewModel: viewModel
-                    )
                 }
                 .store(in: &cancellables)
         }
