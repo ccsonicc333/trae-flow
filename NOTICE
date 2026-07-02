@@ -1,0 +1,26 @@
+TRAE FLOW
+Copyright 2026 TRAE FLOW contributors
+
+TRAE FLOW was forked from ping-island by erha19, which was derived
+from claude-island by Farouq Aldori. TRAE FLOW has been substantially
+modified to focus exclusively on TRAE variants
+(TRAE / TRAE CN / TRAE WORK / TRAE WORK CN).
+
+Forked and modified by ccsonicc333.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this work except in compliance with the License.
+You may obtain a copy of the License in LICENSE.md or at:
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+This distribution also includes third-party components with their own
+license terms:
+
+- Silkscreen font
+  Copyright 2001 The Silkscreen Project Authors
+  Licensed under the SIL Open Font License, Version 1.1
+  See TraeFlow/Resources/Fonts/Silkscreen-OFL.txt
+
+The contents of this NOTICE file are for informational purposes only and
+do not modify the terms of the Apache License, Version 2.0.

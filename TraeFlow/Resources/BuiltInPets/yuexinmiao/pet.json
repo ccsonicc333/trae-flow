@@ -1,0 +1,47 @@
+{
+  "id": "yuexinmiao",
+  "displayName": "月薪喵",
+  "description": "",
+  "kind": "animal",
+  "frameWidth": 192,
+  "frameHeight": 208,
+  "fps": 8,
+  "animations": {
+    "idle": {
+      "row": 4,
+      "frames": 8
+    },
+    "runRight": {
+      "row": 1,
+      "frames": 8
+    },
+    "runLeft": {
+      "row": 2,
+      "frames": 8
+    },
+    "waving": {
+      "row": 3,
+      "frames": 8
+    },
+    "jumping": {
+      "row": 0,
+      "frames": 8
+    },
+    "failed": {
+      "row": 5,
+      "frames": 8
+    },
+    "waiting": {
+      "row": 6,
+      "frames": 8
+    },
+    "running": {
+      "row": 7,
+      "frames": 8
+    },
+    "review": {
+      "row": 8,
+      "frames": 8
+    }
+  }
+}

@@ -1,0 +1,1986 @@
+import AppKit
+import Combine
+import SwiftUI
+
+final class DetachedIslandWindow: NSWindow {
+    var petMouseDownHandler: ((NSEvent) -> Bool)?
+    var petMouseDraggedHandler: ((NSEvent) -> Bool)?
+    var petMouseUpHandler: ((NSEvent) -> Bool)?
+    var petRightMouseDownHandler: ((NSEvent) -> Bool)?
+    var petRightMouseUpHandler: ((NSEvent) -> Bool)?
+    var petScrollWheelHandler: ((NSEvent) -> Bool)?
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        let handled: Bool = switch event.type {
+        case .leftMouseDown:
+            petMouseDownHandler?(event) ?? false
+        case .leftMouseDragged:
+            petMouseDraggedHandler?(event) ?? false
+        case .leftMouseUp:
+            petMouseUpHandler?(event) ?? false
+        case .rightMouseDown:
+            petRightMouseDownHandler?(event) ?? false
+        case .rightMouseUp:
+            petRightMouseUpHandler?(event) ?? false
+        case .scrollWheel:
+            petScrollWheelHandler?(event) ?? false
+        default:
+            false
+        }
+
+        guard !handled else { return }
+        super.sendEvent(event)
+    }
+}
+
+final class TransparentHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool { false }
+
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        configureTransparency()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        configureTransparency()
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    private func configureTransparency() {
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.isOpaque = false
+    }
+}
+
+@MainActor
+final class DetachedIslandViewController: NSViewController {
+    private let viewModel: NotchViewModel
+    private let sessionMonitor: SessionMonitor
+    private let interactionModel: DetachedIslandInteractionModel
+    private let bubbleViewState: DetachedIslandBubbleViewState
+    private let onClose: () -> Void
+    var onPetTap: () -> Void = {} {
+        didSet { refreshRootViewIfLoaded() }
+    }
+    var onPetDragStarted: () -> Void = {} {
+        didSet { refreshRootViewIfLoaded() }
+    }
+    var onPetDragChanged: (CGSize) -> Void = { _ in } {
+        didSet { refreshRootViewIfLoaded() }
+    }
+    var onPetDragEnded: () -> Void = {} {
+        didSet { refreshRootViewIfLoaded() }
+    }
+    var onBubbleHoverChanged: (Bool) -> Void = { _ in } {
+        didSet { refreshRootViewIfLoaded() }
+    }
+    var onAttentionActionCompleted: () -> Void = {} {
+        didSet { refreshRootViewIfLoaded() }
+    }
+    var onCompletionNotificationHoverChanged: (Bool) -> Void = { _ in } {
+        didSet { refreshRootViewIfLoaded() }
+    }
+    var onDismissCompletionNotification: () -> Void = {} {
+        didSet { refreshRootViewIfLoaded() }
+    }
+    private var hostingView: TransparentHostingView<AppLocalizedRootView<DetachedIslandPanelView>>!
+
+    init(
+        viewModel: NotchViewModel,
+        sessionMonitor: SessionMonitor,
+        interactionModel: DetachedIslandInteractionModel,
+        bubbleViewState: DetachedIslandBubbleViewState,
+        onClose: @escaping () -> Void
+    ) {
+        self.viewModel = viewModel
+        self.sessionMonitor = sessionMonitor
+        self.interactionModel = interactionModel
+        self.bubbleViewState = bubbleViewState
+        self.onClose = onClose
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        hostingView = TransparentHostingView(rootView: makeRootView())
+
+        self.view = hostingView
+    }
+
+    private func makeRootView() -> AppLocalizedRootView<DetachedIslandPanelView> {
+        AppLocalizedRootView {
+            DetachedIslandPanelView(
+                viewModel: viewModel,
+                sessionMonitor: sessionMonitor,
+                interactionModel: interactionModel,
+                bubbleViewState: bubbleViewState,
+                onClose: onClose,
+                onPetTap: onPetTap,
+                onPetDragStarted: onPetDragStarted,
+                onPetDragChanged: onPetDragChanged,
+                onPetDragEnded: onPetDragEnded,
+                onBubbleHoverChanged: onBubbleHoverChanged,
+                onAttentionActionCompleted: onAttentionActionCompleted,
+                onCompletionNotificationHoverChanged: onCompletionNotificationHoverChanged,
+                onDismissCompletionNotification: onDismissCompletionNotification
+            )
+        }
+    }
+
+    private func refreshRootViewIfLoaded() {
+        guard hostingView != nil else { return }
+        hostingView.rootView = makeRootView()
+    }
+}
+
+@MainActor
+final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate {
+    private static let defaultTrailingInset: CGFloat = 32
+    private static let defaultBottomInset: CGFloat = 48
+    private static let quietBackgroundWindowAlpha: CGFloat = 0.38
+    private static let interactiveWindowAlpha: CGFloat = 1
+
+    private let viewModel: NotchViewModel
+    private let sessionMonitor: SessionMonitor
+    private let onClose: () -> Void
+    private let onPetAnchorChanged: (CGPoint) -> Void
+    private let energyModePublisher: AnyPublisher<EnergyMode, Never>
+    var onRedockRequested: (() -> Void)?
+    private let interactionModel = DetachedIslandInteractionModel()
+    private let bubbleViewState = DetachedIslandBubbleViewState()
+    private var manualAttentionTracker = SessionManualAttentionTracker()
+    private let detachedViewController: DetachedIslandViewController
+    private var lastAppliedLayout: DetachedIslandWindowLayout
+    private(set) var highlightedSessionStableID: String?
+    private var cancellables = Set<AnyCancellable>()
+    private var isWindowSizeUpdateScheduled = false
+    private var isApplyingWindowSizeUpdate = false
+    private var hasPendingWindowSizeUpdate = false
+    /// 宠物缩放时保持其左侧边缘与垂直中心在屏幕上的位置不变，
+    /// 使任务气泡以宠物中心线为参照紧贴左侧，并避免窗口向左侵占其他窗口。
+    private var preservePetTrailingEdgeForNextSizeUpdate = false
+    private var interactionActivationWorkItem: DispatchWorkItem?
+    private var bubbleVisibilityWorkItem: DispatchWorkItem?
+    private var bubbleHoverGraceWorkItem: DispatchWorkItem?
+    private var floatingSettingsHintDismissWorkItem: DispatchWorkItem?
+    private var completionNotificationDismissWorkItem: DispatchWorkItem?
+    private var outsideClickMonitor: EventMonitor?
+    private var floatingDragStartOrigin: CGPoint?
+    private var petMouseDownPoint: CGPoint?
+    private var petMouseDownScreenPoint: CGPoint?
+    private var isPetDragActive = false
+    private var isPetInNotchZone = false
+    private var isPetSecondaryClickArmed = false
+    private var hasPrimedSoundTransitions = false
+    private var previousProcessingIds = Set<String>()
+    private var previousAttentionSoundIds = Set<String>()
+    private var previousCompletionSoundIds = Set<String>()
+    private var previousTaskErrorIds = Set<String>()
+    private var previousResourceLimitIds = Set<String>()
+    private var previousCompletionNotificationPhases: [String: SessionPhase] = [:]
+    private var completionNotificationQueue: [SessionCompletionNotification] = []
+    private var currentEnergyMode: EnergyMode = .quietBackground
+    var bubbleHoverGraceDelay: TimeInterval = 3
+    var completionNotificationDismissDelay: TimeInterval = 5
+    private var activeCompletionNotification: SessionCompletionNotification? {
+        didSet {
+            bubbleViewState.setActiveCompletionNotification(activeCompletionNotification)
+            updateQuietBackgroundWindowOpacity(animated: true)
+        }
+    }
+
+    private var currentGuideBubbleSize: CGSize? {
+        interactionModel.isSettingsHintVisible ? DetachedIslandPanelMetrics.settingsHintBubbleSize : nil
+    }
+
+    init(
+        viewModel: NotchViewModel,
+        sessionMonitor: SessionMonitor,
+        onClose: @escaping () -> Void,
+        onPetAnchorChanged: @escaping (CGPoint) -> Void = { _ in },
+        energyModePublisher: AnyPublisher<EnergyMode, Never>? = nil
+    ) {
+        self.viewModel = viewModel
+        self.sessionMonitor = sessionMonitor
+        self.onClose = onClose
+        self.onPetAnchorChanged = onPetAnchorChanged
+        self.energyModePublisher = energyModePublisher ?? EnergyGovernor.shared.$mode.eraseToAnyPublisher()
+        self.lastAppliedLayout = Self.windowLayout(
+            for: viewModel,
+            sessionMonitor: sessionMonitor
+        )
+
+        let initialContentSize = lastAppliedLayout.containerSize
+        let hostingController = DetachedIslandViewController(
+            viewModel: viewModel,
+            sessionMonitor: sessionMonitor,
+            interactionModel: interactionModel,
+            bubbleViewState: bubbleViewState,
+            onClose: onClose
+        )
+        hostingController.loadViewIfNeeded()
+        self.detachedViewController = hostingController
+
+        let window = DetachedIslandWindow(
+            contentRect: NSRect(origin: .zero, size: initialContentSize),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+
+        hostingController.view.frame = NSRect(origin: .zero, size: initialContentSize)
+        hostingController.view.autoresizingMask = [.width, .height]
+        window.contentView = hostingController.view
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        // Keep shadow rendering inside SwiftUI content; window-level shadow on a transparent
+        // borderless window produces jagged outlines around the composited alpha edges.
+        window.hasShadow = false
+        window.isMovableByWindowBackground = false
+        window.ignoresMouseEvents = true
+        // Keep the detached pet visible above fullscreen apps and across spaces.
+        window.level = .statusBar
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        window.tabbingMode = .disallowed
+        window.isReleasedWhenClosed = false
+        window.alphaValue = Self.quietBackgroundWindowAlpha
+
+        super.init(window: window)
+
+        hostingController.onPetTap = { [weak self] in
+            self?.handlePetTap()
+        }
+        hostingController.onPetDragStarted = { [weak self] in
+            self?.beginFloatingDrag()
+        }
+        hostingController.onPetDragChanged = { [weak self] translation in
+            self?.updateFloatingDrag(translation: translation)
+        }
+        hostingController.onPetDragEnded = { [weak self] in
+            self?.endFloatingDrag()
+        }
+        hostingController.onBubbleHoverChanged = { [weak self] isHovering in
+            self?.handleBubbleHoverChanged(isHovering)
+        }
+        hostingController.onAttentionActionCompleted = { [weak self] in
+            self?.dismissAttentionBubble()
+        }
+        hostingController.onCompletionNotificationHoverChanged = { [weak self] isHovering in
+            self?.handleCompletionNotificationHover(isHovering)
+        }
+        hostingController.onDismissCompletionNotification = { [weak self] in
+            self?.dismissActiveCompletionNotification(closeBubble: true, advanceQueue: true)
+        }
+        window.petMouseDownHandler = { [weak self] event in
+            self?.handlePetMouseDown(event) ?? false
+        }
+        window.petMouseDraggedHandler = { [weak self] event in
+            self?.handlePetMouseDragged(event) ?? false
+        }
+        window.petMouseUpHandler = { [weak self] event in
+            self?.handlePetMouseUp(event) ?? false
+        }
+        window.petRightMouseDownHandler = { [weak self] event in
+            self?.handlePetRightMouseDown(event) ?? false
+        }
+        window.petRightMouseUpHandler = { [weak self] event in
+            self?.handlePetRightMouseUp(event) ?? false
+        }
+        window.petScrollWheelHandler = { [weak self] event in
+            self?.handlePetScrollWheel(event) ?? false
+        }
+
+        window.delegate = self
+        bindWindowSizeUpdates()
+        primeCompletionNotificationTracking(sessionMonitor.instances)
+        primeSoundTransitions(sessionMonitor.instances)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func present(
+        at origin: CGPoint,
+        activatesApplication: Bool = true,
+        presentsAutomaticContent: Bool = true
+    ) {
+        guard let window else { return }
+        suppressInteraction()
+        lastAppliedLayout = Self.windowLayout(
+            for: viewModel,
+            sessionMonitor: sessionMonitor,
+            bubbleState: bubbleViewState.renderedBubbleState,
+            bubblePlacement: interactionModel.bubblePlacement,
+            measuredAttentionBubbleHeight: bubbleViewState.measuredAttentionBubbleHeight,
+            measuredCompletionBubbleHeight: bubbleViewState.measuredCompletionBubbleHeight,
+            activeCompletionNotification: activeCompletionNotification,
+            guideBubbleSize: currentGuideBubbleSize
+        )
+        let initialFrame = NSRect(
+            origin: origin,
+            size: lastAppliedLayout.containerSize
+        )
+        window.setFrame(initialFrame, display: false)
+        updateBubblePlacementForCurrentWindow()
+        updateQuietBackgroundWindowOpacity(animated: false)
+        showWindow(
+            window,
+            activatesApplication: activatesApplication
+        )
+        if presentsAutomaticContent {
+            presentExistingAttentionIfNeeded()
+            presentFloatingSettingsHintIfNeeded()
+        } else {
+            primeExistingAttentionTracking()
+        }
+    }
+
+    func present(
+        atPetAnchor petAnchor: CGPoint,
+        activatesApplication: Bool = true,
+        presentsAutomaticContent: Bool = true
+    ) {
+        guard let window else { return }
+        suppressInteraction()
+        lastAppliedLayout = Self.windowLayout(
+            for: viewModel,
+            sessionMonitor: sessionMonitor,
+            bubbleState: bubbleViewState.renderedBubbleState,
+            bubblePlacement: interactionModel.bubblePlacement,
+            measuredAttentionBubbleHeight: bubbleViewState.measuredAttentionBubbleHeight,
+            measuredCompletionBubbleHeight: bubbleViewState.measuredCompletionBubbleHeight,
+            activeCompletionNotification: activeCompletionNotification,
+            guideBubbleSize: currentGuideBubbleSize,
+            petAnchorScreen: petAnchor,
+            availableFrame: availableFrame(for: petAnchor)
+        )
+        let origin = Self.windowOrigin(
+            preservingPetAnchorAt: petAnchor,
+            layout: lastAppliedLayout
+        )
+        let frame = NSRect(origin: origin, size: lastAppliedLayout.containerSize)
+        window.setFrame(frame, display: false)
+        updateBubblePlacementForCurrentWindow()
+        updateQuietBackgroundWindowOpacity(animated: false)
+        showWindow(
+            window,
+            activatesApplication: activatesApplication
+        )
+        if presentsAutomaticContent {
+            presentExistingAttentionIfNeeded()
+            presentFloatingSettingsHintIfNeeded()
+        } else {
+            primeExistingAttentionTracking()
+        }
+    }
+
+    private func showWindow(
+        _ window: NSWindow,
+        activatesApplication: Bool
+    ) {
+        if activatesApplication {
+            NSApp.activate(ignoringOtherApps: false)
+            showWindow(nil)
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            window.orderFront(nil)
+        }
+    }
+
+    private func primeExistingAttentionTracking() {
+        _ = manualAttentionTracker.consumeNewAttentionSession(
+            from: sessionMonitor.instances
+        )
+    }
+
+    var currentPetAnchor: CGPoint? {
+        guard let window else { return nil }
+        return Self.petAnchorScreenPoint(for: window.frame, layout: lastAppliedLayout)
+    }
+
+    var currentExpandedRoute: IslandExpandedRoute? {
+        guard let bubbleContentMode = interactionModel.bubbleContentMode else { return nil }
+        return DetachedIslandContentModel.route(
+            for: sessionMonitor.instances,
+            viewModel: viewModel,
+            mode: bubbleContentMode,
+            activeCompletionNotification: activeCompletionNotification
+        )
+    }
+
+    func activateInteraction() {
+        interactionActivationWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, let window = self.window else { return }
+            self.interactionActivationWorkItem = nil
+            window.ignoresMouseEvents = false
+        }
+
+        interactionActivationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
+    }
+
+    func updateDragPosition(
+        cursorLocation: CGPoint,
+        cursorWindowOffset: CGPoint
+    ) {
+        guard let window else { return }
+        suppressInteraction()
+        interactionModel.resetForDragSuppression()
+        hideBubbleRenderingImmediately()
+        let contentSize = window.frame.size
+        let origin = Self.windowOrigin(
+            for: cursorLocation,
+            cursorWindowOffset: cursorWindowOffset,
+            windowSize: contentSize
+        )
+        window.setFrameOrigin(origin)
+        updateBubblePlacementForCurrentWindow()
+        isPetInNotchZone = isPetAnchorInNotchZone()
+    }
+
+    func beginFloatingDrag() {
+        guard floatingDragStartOrigin == nil else { return }
+        cancelInteractionActivation()
+        interactionModel.resetForDragSuppression()
+        interactionModel.setPetDragging(true)
+        updateQuietBackgroundWindowOpacity(animated: true)
+        hideBubbleRenderingImmediately()
+        floatingDragStartOrigin = window?.frame.origin
+    }
+
+    func updateFloatingDrag(translation: CGSize) {
+        guard let window else { return }
+
+        if floatingDragStartOrigin == nil {
+            beginFloatingDrag()
+        }
+
+        guard let startOrigin = floatingDragStartOrigin else { return }
+        let origin = CGPoint(
+            x: startOrigin.x + translation.width,
+            y: startOrigin.y + translation.height
+        )
+        window.setFrameOrigin(origin)
+        updateBubblePlacementForCurrentWindow()
+        isPetInNotchZone = isPetAnchorInNotchZone()
+    }
+
+    func endFloatingDrag() {
+        floatingDragStartOrigin = nil
+        interactionModel.setPetDragging(false)
+        if isPetInNotchZone {
+            isPetInNotchZone = false
+            onRedockRequested?()
+            return
+        }
+        if let currentPetAnchor {
+            onPetAnchorChanged(currentPetAnchor)
+        }
+        updateQuietBackgroundWindowOpacity(animated: true)
+        activateInteraction()
+    }
+
+    func endWindowDrag() {
+        if isPetInNotchZone {
+            isPetInNotchZone = false
+            onRedockRequested?()
+            return
+        }
+        updateQuietBackgroundWindowOpacity(animated: true)
+        activateInteraction()
+    }
+
+    func handlePetSecondaryClick() {
+        dismissFloatingSettingsHint()
+        SettingsWindowController.shared.present()
+    }
+
+    func presentHoverBubbleForTesting() {
+        let canPresentBubble = DetachedIslandContentModel.canPresentBubble(
+            from: sessionMonitor.instances,
+            mode: .hoverPreview,
+            activeCompletionNotification: activeCompletionNotification
+        )
+        applyBubbleStateChange {
+            interactionModel.presentHoverPreview(canPresentBubble: canPresentBubble)
+        }
+    }
+
+    func togglePinnedBubbleForTesting() {
+        let canPresentBubble = DetachedIslandContentModel.canPresentBubble(
+            from: sessionMonitor.instances,
+            mode: .pinnedList
+        )
+        applyBubbleStateChange {
+            interactionModel.togglePinned(canPresentBubble: canPresentBubble)
+        }
+    }
+
+    func hideBubbleForTesting() {
+        applyBubbleStateChange {
+            interactionModel.hidePinnedBubble()
+        }
+    }
+
+    func simulatePetTapForTesting() {
+        handlePetTap()
+    }
+
+    func simulateBubbleHoverForTesting(_ isHovering: Bool) {
+        handleBubbleHoverChanged(isHovering)
+    }
+
+    func simulateOutsideBubbleClickForTesting(screenLocation: CGPoint) {
+        handlePotentialOutsideClick(screenLocation: screenLocation)
+    }
+
+    func dismissAttentionBubble() {
+        applyBubbleStateChange {
+            interactionModel.hidePinnedBubble()
+        }
+    }
+
+    var renderedBubbleStateForTesting: DetachedIslandBubbleState {
+        bubbleViewState.renderedBubbleState
+    }
+
+    var isBubbleVisibleForTesting: Bool {
+        bubbleViewState.isBubbleVisible
+    }
+
+    var isPetDraggingForTesting: Bool {
+        interactionModel.isPetDragging
+    }
+
+    var windowAlphaForTesting: CGFloat? {
+        window?.alphaValue
+    }
+
+    func applyEnergyModeForTesting(_ mode: EnergyMode) {
+        currentEnergyMode = mode
+        updateQuietBackgroundWindowOpacity(animated: false)
+    }
+
+    func applySessionSnapshotForTesting(_ sessions: [SessionState]) {
+        sessionMonitor.instances = sessions
+        handleManualAttentionChange()
+        handleCompletionNotificationChange(sessions)
+        handleSessionSoundTransitions(sessions)
+        reconcileHighlightedSessionState()
+    }
+
+    var currentActiveCompletionNotificationForTesting: SessionCompletionNotification? {
+        activeCompletionNotification
+    }
+
+    func simulateCompletionNotificationHoverForTesting(_ isHovering: Bool) {
+        handleCompletionNotificationHover(isHovering)
+    }
+
+    func presentCompletionNotificationForTesting(_ notification: SessionCompletionNotification) {
+        activeCompletionNotification = notification
+        applyBubbleStateChange {
+            interactionModel.presentHoverPreview(canPresentBubble: true)
+        }
+        scheduleCompletionNotificationDismissal(for: notification.id)
+    }
+
+    func dismiss() {
+        interactionActivationWorkItem?.cancel()
+        interactionActivationWorkItem = nil
+        bubbleVisibilityWorkItem?.cancel()
+        bubbleVisibilityWorkItem = nil
+        bubbleHoverGraceWorkItem?.cancel()
+        bubbleHoverGraceWorkItem = nil
+        floatingSettingsHintDismissWorkItem?.cancel()
+        floatingSettingsHintDismissWorkItem = nil
+        completionNotificationDismissWorkItem?.cancel()
+        completionNotificationDismissWorkItem = nil
+        outsideClickMonitor?.stop()
+        outsideClickMonitor = nil
+        floatingDragStartOrigin = nil
+        interactionModel.setPetDragging(false)
+        window?.orderOut(nil)
+        window?.alphaValue = Self.interactiveWindowAlpha
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        onClose()
+        return false
+    }
+
+    private func bindWindowSizeUpdates() {
+        viewModel.$detachedContentType
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        sessionMonitor.$instances
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] instances in
+                self?.handleManualAttentionChange()
+                self?.handleCompletionNotificationChange(instances)
+                self?.handleSessionSoundTransitions(instances)
+                self?.reconcileHighlightedSessionState()
+                self?.reconcileBubbleStateWithAvailableContent()
+                self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        bubbleViewState.$measuredAttentionBubbleHeight
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        bubbleViewState.$measuredCompletionBubbleHeight
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        interactionModel.$bubbleState
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] bubbleState in
+                self?.syncBubblePresentation(to: bubbleState)
+                self?.syncOutsideClickMonitor()
+                self?.reconcileHighlightedSessionState()
+            }
+            .store(in: &cancellables)
+
+        interactionModel.$bubblePlacement
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        interactionModel.$isPetDragging
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateQuietBackgroundWindowOpacity(animated: true)
+            }
+            .store(in: &cancellables)
+
+        energyModePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mode in
+                guard let self else { return }
+                self.currentEnergyMode = mode
+                self.updateQuietBackgroundWindowOpacity(animated: true)
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$notchDisplayMode
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.reconcileHighlightedSessionState()
+                self?.reconcileBubbleStateWithAvailableContent()
+                self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$floatingPetSizeMode
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$floatingPetCustomScale
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.preservePetTrailingEdgeForNextSizeUpdate = true
+                self?.scheduleWindowSizeUpdate()
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$autoOpenCompletionPanel
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isEnabled in
+                guard let self else { return }
+                if !isEnabled {
+                    self.removeCompletionNotifications(
+                        matching: { $0 == .completed || $0 == .ended },
+                        keepBubbleOpen: false
+                    )
+                } else {
+                    self.maybePresentNextCompletionNotification()
+                }
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$autoOpenCompactedNotificationPanel
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isEnabled in
+                guard let self else { return }
+                if !isEnabled {
+                    self.removeCompletionNotifications(
+                        matching: { $0 == .compacted },
+                        keepBubbleOpen: false
+                    )
+                } else {
+                    self.maybePresentNextCompletionNotification()
+                }
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$temporarilyMuteNotificationsUntil
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mutedUntil in
+                guard let self,
+                      AppSettings.isNotificationMuteActive(until: mutedUntil) else { return }
+                self.clearCompletionNotifications(keepBubbleOpen: false)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func scheduleWindowSizeUpdate() {
+        hasPendingWindowSizeUpdate = true
+        guard !isWindowSizeUpdateScheduled else { return }
+        isWindowSizeUpdateScheduled = true
+
+        DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.isWindowSizeUpdateScheduled = false
+                self.applyPendingWindowSizeUpdate()
+            }
+        }
+    }
+
+    private func applyPendingWindowSizeUpdate() {
+        applyPendingWindowSizeUpdate(renderedBubbleState: bubbleViewState.renderedBubbleState)
+    }
+
+    private func applyPendingWindowSizeUpdate(renderedBubbleState: DetachedIslandBubbleState) {
+        guard let window else { return }
+        guard hasPendingWindowSizeUpdate else { return }
+
+        if isApplyingWindowSizeUpdate {
+            scheduleWindowSizeUpdate()
+            return
+        }
+
+        hasPendingWindowSizeUpdate = false
+        let currentFrame = window.frame
+        let petAnchorScreen = Self.petAnchorScreenPoint(
+            for: currentFrame,
+            layout: lastAppliedLayout
+        )
+        let newLayout = Self.windowLayout(
+            for: viewModel,
+            sessionMonitor: sessionMonitor,
+            bubbleState: renderedBubbleState,
+            bubblePlacement: interactionModel.bubblePlacement,
+            measuredAttentionBubbleHeight: bubbleViewState.measuredAttentionBubbleHeight,
+            measuredCompletionBubbleHeight: bubbleViewState.measuredCompletionBubbleHeight,
+            activeCompletionNotification: activeCompletionNotification,
+            guideBubbleSize: currentGuideBubbleSize,
+            petAnchorScreen: petAnchorScreen,
+            availableFrame: availableFrame(for: petAnchorScreen)
+        )
+        interactionModel.setBubblePlacement(newLayout.bubblePlacement)
+        let newOrigin: CGPoint
+        if preservePetTrailingEdgeForNextSizeUpdate {
+            preservePetTrailingEdgeForNextSizeUpdate = false
+            // 缩放时保持宠物左侧边缘与垂直中心固定，任务气泡以中心线为参照紧贴左侧，
+            // 宠物向右扩展，避免窗口向左侵占其他窗口。
+            newOrigin = Self.windowOrigin(
+                preservingPetLeadingEdgeAndCenter: currentFrame,
+                lastLayout: lastAppliedLayout,
+                newLayout: newLayout
+            )
+        } else {
+            newOrigin = Self.windowOrigin(
+                preservingPetAnchorAt: petAnchorScreen,
+                layout: newLayout
+            )
+        }
+        let targetFrame = NSRect(origin: newOrigin, size: newLayout.containerSize)
+
+        guard !Self.framesMatch(currentFrame, targetFrame) else {
+            lastAppliedLayout = newLayout
+            return
+        }
+
+        isApplyingWindowSizeUpdate = true
+        window.setFrame(targetFrame, display: false, animate: false)
+        isApplyingWindowSizeUpdate = false
+        lastAppliedLayout = newLayout
+
+        if hasPendingWindowSizeUpdate {
+            scheduleWindowSizeUpdate()
+        }
+    }
+
+    static func windowLayout(
+        for viewModel: NotchViewModel,
+        sessionMonitor: SessionMonitor,
+        bubbleState: DetachedIslandBubbleState = .hidden,
+        bubblePlacement: DetachedIslandBubblePlacement = .topLeft,
+        measuredAttentionBubbleHeight: CGFloat? = nil,
+        measuredCompletionBubbleHeight: CGFloat? = nil,
+        activeCompletionNotification: SessionCompletionNotification? = nil,
+        guideBubbleSize: CGSize? = nil,
+        petAnchorScreen: CGPoint? = nil,
+        availableFrame: CGRect? = nil
+    ) -> DetachedIslandWindowLayout {
+        DetachedIslandContentModel.layout(
+            for: sessionMonitor.instances,
+            viewModel: viewModel,
+            bubbleState: bubbleState,
+            bubblePlacement: bubblePlacement,
+            measuredAttentionBubbleHeight: measuredAttentionBubbleHeight,
+            measuredCompletionBubbleHeight: measuredCompletionBubbleHeight,
+            activeCompletionNotification: activeCompletionNotification,
+            guideBubbleSize: guideBubbleSize,
+            petScreenAnchor: petAnchorScreen,
+            availableFrame: availableFrame
+        )
+    }
+
+    static func windowSize(
+        for viewModel: NotchViewModel,
+        sessionMonitor: SessionMonitor,
+        bubbleState: DetachedIslandBubbleState = .hidden,
+        bubblePlacement: DetachedIslandBubblePlacement = .topLeft,
+        measuredAttentionBubbleHeight: CGFloat? = nil,
+        measuredCompletionBubbleHeight: CGFloat? = nil,
+        activeCompletionNotification: SessionCompletionNotification? = nil,
+        guideBubbleSize: CGSize? = nil,
+        petAnchorScreen: CGPoint? = nil,
+        availableFrame: CGRect? = nil
+    ) -> CGSize {
+        windowLayout(
+            for: viewModel,
+            sessionMonitor: sessionMonitor,
+            bubbleState: bubbleState,
+            bubblePlacement: bubblePlacement,
+            measuredAttentionBubbleHeight: measuredAttentionBubbleHeight,
+            measuredCompletionBubbleHeight: measuredCompletionBubbleHeight,
+            activeCompletionNotification: activeCompletionNotification,
+            guideBubbleSize: guideBubbleSize,
+            petAnchorScreen: petAnchorScreen,
+            availableFrame: availableFrame
+        ).containerSize
+    }
+
+    static func windowOrigin(
+        for cursorLocation: CGPoint,
+        cursorWindowOffset: CGPoint,
+        windowSize: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: cursorLocation.x - cursorWindowOffset.x,
+            y: cursorLocation.y - min(cursorWindowOffset.y, windowSize.height)
+        )
+    }
+
+    static func defaultPetAnchor(
+        in visibleFrame: CGRect,
+        alignedTo activeWindowFrame: CGRect? = nil
+    ) -> CGPoint {
+        let halfPet = DetachedIslandPanelMetrics.petMetrics(for: visibleFrame).petHitFrame / 2
+        let referenceFrame = activeWindowFrame?
+            .intersection(visibleFrame)
+            .nilIfEmpty ?? visibleFrame
+
+        return CGPoint(
+            x: referenceFrame.maxX - defaultTrailingInset - halfPet,
+            y: referenceFrame.minY + defaultBottomInset + halfPet
+        )
+    }
+
+    static func clampedPetAnchor(
+        _ petAnchor: CGPoint,
+        in visibleFrame: CGRect
+    ) -> CGPoint {
+        let halfPet = DetachedIslandPanelMetrics.petMetrics(for: visibleFrame).petHitFrame / 2
+        let minX = visibleFrame.minX + halfPet
+        let maxX = visibleFrame.maxX - halfPet
+        let minY = visibleFrame.minY + halfPet
+        let maxY = visibleFrame.maxY - halfPet
+
+        let resolvedX = minX <= maxX
+            ? min(max(petAnchor.x, minX), maxX)
+            : visibleFrame.midX
+        let resolvedY = minY <= maxY
+            ? min(max(petAnchor.y, minY), maxY)
+            : visibleFrame.midY
+
+        return CGPoint(x: resolvedX, y: resolvedY)
+    }
+
+    static func floatingPetAnchor(
+        from petAnchor: CGPoint,
+        in visibleFrame: CGRect
+    ) -> FloatingPetAnchor {
+        let clampedAnchor = clampedPetAnchor(petAnchor, in: visibleFrame)
+        let xRatio = visibleFrame.width > 0
+            ? (clampedAnchor.x - visibleFrame.minX) / visibleFrame.width
+            : 0.5
+        let yRatio = visibleFrame.height > 0
+            ? (clampedAnchor.y - visibleFrame.minY) / visibleFrame.height
+            : 0.5
+
+        return FloatingPetAnchor(
+            xRatio: Double(xRatio),
+            yRatio: Double(yRatio)
+        )
+    }
+
+    static func petAnchor(
+        from storedAnchor: FloatingPetAnchor?,
+        in visibleFrame: CGRect,
+        defaultWindowFrame: CGRect? = nil
+    ) -> CGPoint {
+        guard let storedAnchor else {
+            return clampedPetAnchor(
+                defaultPetAnchor(
+                    in: visibleFrame,
+                    alignedTo: defaultWindowFrame
+                ),
+                in: visibleFrame
+            )
+        }
+
+        let rawAnchor = CGPoint(
+            x: visibleFrame.minX + (CGFloat(storedAnchor.xRatio) * visibleFrame.width),
+            y: visibleFrame.minY + (CGFloat(storedAnchor.yRatio) * visibleFrame.height)
+        )
+        return clampedPetAnchor(rawAnchor, in: visibleFrame)
+    }
+
+    static func petAnchorScreenPoint(
+        for frame: NSRect,
+        layout: DetachedIslandWindowLayout
+    ) -> CGPoint {
+        CGPoint(
+            x: frame.minX + layout.petAnchorInWindow.x,
+            y: frame.maxY - layout.petAnchorInWindow.y
+        )
+    }
+
+    static func windowOrigin(
+        preservingPetAnchorAt petAnchorScreen: CGPoint,
+        layout: DetachedIslandWindowLayout
+    ) -> CGPoint {
+        CGPoint(
+            x: petAnchorScreen.x - layout.petAnchorInWindow.x,
+            y: petAnchorScreen.y - (layout.containerSize.height - layout.petAnchorInWindow.y)
+        )
+    }
+
+    /// 缩放宠物时保持其左侧边缘与垂直中心在屏幕上的位置不变。
+    /// 这样气泡以宠物中心线为垂直参照并紧贴左侧，宠物向右扩展，避免窗口向左侵占其他窗口。
+    static func windowOrigin(
+        preservingPetLeadingEdgeAndCenter currentFrame: NSRect,
+        lastLayout: DetachedIslandWindowLayout,
+        newLayout: DetachedIslandWindowLayout
+    ) -> CGPoint {
+        let petLeftScreenX = currentFrame.minX + lastLayout.petFrame.minX
+        let petCenterScreen = CGPoint(
+            x: currentFrame.minX + lastLayout.petAnchorInWindow.x,
+            y: currentFrame.maxY - lastLayout.petAnchorInWindow.y
+        )
+        return CGPoint(
+            x: petLeftScreenX - newLayout.petFrame.minX,
+            y: petCenterScreen.y - (newLayout.containerSize.height - newLayout.petAnchorInWindow.y)
+        )
+    }
+
+    static func petInteractionFrame(
+        for layout: DetachedIslandWindowLayout
+    ) -> CGRect {
+        CGRect(
+            x: layout.petFrame.minX,
+            y: layout.containerSize.height - layout.petFrame.maxY,
+            width: layout.petFrame.width,
+            height: layout.petFrame.height
+        )
+    }
+
+    static func floatingDragTranslation(
+        from start: CGPoint,
+        to current: CGPoint
+    ) -> CGSize {
+        CGSize(
+            width: current.x - start.x,
+            height: current.y - start.y
+        )
+    }
+
+    private static func framesMatch(_ lhs: NSRect, _ rhs: NSRect) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) < 0.5 &&
+        abs(lhs.origin.y - rhs.origin.y) < 0.5 &&
+        abs(lhs.size.width - rhs.size.width) < 0.5 &&
+        abs(lhs.size.height - rhs.size.height) < 0.5
+    }
+
+    private func suppressInteraction() {
+        cancelInteractionActivation()
+        window?.ignoresMouseEvents = true
+    }
+
+    private func cancelInteractionActivation() {
+        interactionActivationWorkItem?.cancel()
+        interactionActivationWorkItem = nil
+    }
+
+    private func handlePetMouseDown(_ event: NSEvent) -> Bool {
+        let point = event.locationInWindow
+        guard isPointInsidePet(point) else { return false }
+        petMouseDownPoint = point
+        petMouseDownScreenPoint = screenPoint(for: event)
+        isPetDragActive = false
+        return true
+    }
+
+    private func handlePetMouseDragged(_ event: NSEvent) -> Bool {
+        guard petMouseDownPoint != nil,
+              let petMouseDownScreenPoint else { return false }
+
+        let currentScreenPoint = screenPoint(for: event)
+        let translation = Self.floatingDragTranslation(
+            from: petMouseDownScreenPoint,
+            to: currentScreenPoint
+        )
+
+        if !isPetDragActive,
+           hypot(translation.width, translation.height) >= 3 {
+            isPetDragActive = true
+            dismissFloatingSettingsHint()
+            beginFloatingDrag()
+        }
+
+        guard isPetDragActive else { return true }
+        updateFloatingDrag(translation: translation)
+        return true
+    }
+
+    private func handlePetMouseUp(_ event: NSEvent) -> Bool {
+        defer {
+            petMouseDownPoint = nil
+            petMouseDownScreenPoint = nil
+            isPetDragActive = false
+        }
+
+        guard petMouseDownPoint != nil else { return false }
+
+        if isPetDragActive {
+            endFloatingDrag()
+            return true
+        }
+
+        guard isPointInsidePet(event.locationInWindow) else { return true }
+        dismissFloatingSettingsHint()
+        detachedViewController.onPetTap()
+        return true
+    }
+
+    // MARK: - Pet scroll-to-zoom
+
+    /// 滚轮缩放宠物：鼠标悬停在宠物上滚动即可调整大小。
+    private func handlePetScrollWheel(_ event: NSEvent) -> Bool {
+        guard isPointInsidePet(event.locationInWindow) else { return false }
+
+        let deltaY = event.scrollingDeltaY
+        guard deltaY != 0 else { return false }
+
+        // trackpad 双指缩放（magnification）走 magnify(with:)，这里只处理滚轮
+        let currentScale = currentPetScale()
+        // 每滚一格调整 8%，向上放大、向下缩小
+        let step: CGFloat = 0.08
+        let delta = deltaY > 0 ? step : -step
+        // 无上限放大，最小 0.5 防止宠物消失
+        let newScale = max(currentScale + delta, 0.5)
+        AppSettings.floatingPetCustomScale = newScale
+        return true
+    }
+
+    private func currentPetScale() -> CGFloat {
+        let customScale = AppSettings.floatingPetCustomScale
+        if customScale > 0 { return customScale }
+        let visibleFrame = window?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        return DetachedIslandPanelMetrics.resolutionScale(
+            for: visibleFrame,
+            sizeMode: AppSettings.floatingPetSizeMode
+        )
+    }
+
+    private func handlePetRightMouseDown(_ event: NSEvent) -> Bool {
+        guard isPointInsidePet(event.locationInWindow) else {
+            isPetSecondaryClickArmed = false
+            return false
+        }
+
+        isPetSecondaryClickArmed = true
+        return true
+    }
+
+    private func handlePetRightMouseUp(_ event: NSEvent) -> Bool {
+        defer { isPetSecondaryClickArmed = false }
+        guard isPetSecondaryClickArmed else { return false }
+        guard isPointInsidePet(event.locationInWindow) else { return true }
+
+        handlePetSecondaryClick()
+        return true
+    }
+
+    private func isPointInsidePet(_ point: CGPoint) -> Bool {
+        Self.petInteractionFrame(for: lastAppliedLayout).contains(point)
+    }
+
+    private func screenPoint(for event: NSEvent) -> CGPoint {
+        MouseEventReplay.appKitScreenLocation(
+            for: event,
+            fallbackScreenLocation: NSEvent.mouseLocation
+        )
+    }
+
+    private func isPetAnchorInNotchZone() -> Bool {
+        guard let petAnchor = currentPetAnchor else { return false }
+        // 使用 Flow 岛闭合矩形外扩作为拖回检测区域，确保用户能轻松将宠物拖回
+        let targetRect = viewModel.closedScreenRect.insetBy(dx: -40, dy: -40)
+        return targetRect.contains(petAnchor)
+    }
+
+    private func syncBubblePresentation(to targetState: DetachedIslandBubbleState) {
+        bubbleVisibilityWorkItem?.cancel()
+        bubbleVisibilityWorkItem = nil
+        updateQuietBackgroundWindowOpacity(animated: true)
+
+        switch targetState {
+        case .hidden:
+            cancelBubbleHoverGraceTimer()
+            hideBubblePresentation()
+        case .hoverPreview, .pinned:
+            showBubblePresentation(targetState)
+        }
+    }
+
+    private func showBubblePresentation(_ targetState: DetachedIslandBubbleState) {
+        bubbleViewState.prepareLayout(for: targetState)
+        applyWindowSizeUpdateImmediately()
+        withAnimation(.easeInOut(duration: bubbleViewState.bubbleFadeDuration)) {
+            bubbleViewState.setBubbleVisible(true)
+        }
+    }
+
+    private func hideBubbleRenderingImmediately() {
+        bubbleVisibilityWorkItem?.cancel()
+        bubbleVisibilityWorkItem = nil
+        cancelBubbleHoverGraceTimer()
+        bubbleViewState.setBubbleVisible(false)
+        applyWindowSizeUpdateImmediately(renderedBubbleState: .hidden)
+        bubbleViewState.prepareLayout(for: .hidden)
+    }
+
+    private func hideBubblePresentation() {
+        guard bubbleViewState.renderedBubbleState != .hidden else {
+            hideBubbleRenderingImmediately()
+            return
+        }
+
+        withAnimation(.easeInOut(duration: bubbleViewState.bubbleFadeDuration)) {
+            bubbleViewState.setBubbleVisible(false)
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.bubbleVisibilityWorkItem = nil
+            guard self.interactionModel.bubbleState == .hidden else { return }
+            self.applyWindowSizeUpdateImmediately(renderedBubbleState: .hidden)
+            self.bubbleViewState.prepareLayout(for: .hidden)
+            self.updateQuietBackgroundWindowOpacity(animated: true)
+        }
+
+        bubbleVisibilityWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + bubbleViewState.bubbleFadeDuration,
+            execute: workItem
+        )
+    }
+
+    private func applyWindowSizeUpdateImmediately(
+        renderedBubbleState: DetachedIslandBubbleState? = nil
+    ) {
+        hasPendingWindowSizeUpdate = true
+        applyPendingWindowSizeUpdate(
+            renderedBubbleState: renderedBubbleState ?? bubbleViewState.renderedBubbleState
+        )
+    }
+
+    private func applyBubbleStateChange(_ change: () -> Void) {
+        let previousState = interactionModel.bubbleState
+        change()
+        syncBubblePresentation(to: interactionModel.bubbleState)
+        syncOutsideClickMonitor()
+        reconcileHighlightedSessionState()
+        recordBubbleTelemetryTransition(from: previousState, to: interactionModel.bubbleState)
+    }
+
+    private var shouldDimForQuietBackground: Bool {
+        currentEnergyMode == .quietBackground
+            && interactionModel.bubbleState == .hidden
+            && !interactionModel.isPetDragging
+            && activeCompletionNotification == nil
+    }
+
+    private func updateQuietBackgroundWindowOpacity(animated: Bool) {
+        guard let window else { return }
+        let targetAlpha = shouldDimForQuietBackground
+            ? Self.quietBackgroundWindowAlpha
+            : Self.interactiveWindowAlpha
+        guard abs(window.alphaValue - targetAlpha) > 0.01 else { return }
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                window.animator().alphaValue = targetAlpha
+            }
+        } else {
+            window.alphaValue = targetAlpha
+        }
+    }
+
+    private func recordBubbleTelemetryTransition(
+        from previousState: DetachedIslandBubbleState,
+        to currentState: DetachedIslandBubbleState
+    ) {
+        guard previousState != currentState else { return }
+
+        if previousState == .hidden, currentState != .hidden {
+            let openSource = currentState == .hoverPreview ? "hover" : "click"
+            let contentRoute = telemetryContentRoute(for: currentState)
+            Task {
+                await TelemetryService.shared.recordIslandOpened(
+                    openSource: openSource,
+                    contentRoute: contentRoute,
+                    presentation: "detached"
+                )
+            }
+            return
+        }
+
+        if previousState != .hidden, currentState == .hidden {
+            let openSource = previousState == .hoverPreview ? "hover" : "click"
+            let contentRoute = telemetryContentRoute(for: previousState)
+            Task {
+                await TelemetryService.shared.recordIslandClosed(
+                    openSource: openSource,
+                    contentRoute: contentRoute,
+                    presentation: "detached"
+                )
+            }
+        }
+    }
+
+    private func telemetryContentRoute(for bubbleState: DetachedIslandBubbleState) -> String {
+        if activeCompletionNotification != nil {
+            return "completion_notification"
+        }
+        if IslandExpandedRouteResolver.highestPriorityAttentionSession(from: sessionMonitor.instances) != nil {
+            return "attention"
+        }
+
+        switch bubbleState {
+        case .hidden:
+            return "none"
+        case .hoverPreview:
+            return "session_preview"
+        case .pinned:
+            return "session_list"
+        }
+    }
+
+    private func handlePetTap() {
+        let canPresentPreview = DetachedIslandContentModel.canPresentBubble(
+            from: sessionMonitor.instances,
+            mode: .hoverPreview,
+            activeCompletionNotification: activeCompletionNotification
+        )
+        let canPresentPinnedBubble = DetachedIslandContentModel.canPresentBubble(
+            from: sessionMonitor.instances,
+            mode: .pinnedList
+        )
+        let previousBubbleState = interactionModel.bubbleState
+
+        applyBubbleStateChange {
+            interactionModel.togglePrimaryBubble(
+                canPresentPreview: canPresentPreview,
+                canPresentPinnedBubble: canPresentPinnedBubble
+            )
+        }
+
+        handlePrimaryBubbleTapTransition(
+            from: previousBubbleState,
+            to: interactionModel.bubbleState
+        )
+    }
+
+    private func presentExistingAttentionIfNeeded() {
+        guard interactionModel.bubbleState != .pinned else { return }
+        guard DetachedIslandContentModel.canPresentBubble(
+            from: sessionMonitor.instances,
+            mode: .hoverPreview,
+            activeCompletionNotification: activeCompletionNotification
+        ) else {
+            return
+        }
+        guard IslandExpandedRouteResolver.highestPriorityAttentionSession(
+            from: sessionMonitor.instances
+        ) != nil else {
+            return
+        }
+
+        applyBubbleStateChange {
+            interactionModel.presentHoverPreview(canPresentBubble: true)
+        }
+    }
+
+    private func handleManualAttentionChange() {
+        guard let targetSession = manualAttentionTracker.consumeNewAttentionSession(
+            from: sessionMonitor.instances
+        ) else {
+            return
+        }
+
+        clearCompletionNotifications(keepBubbleOpen: true)
+
+        if interactionModel.bubbleState == .pinned {
+            updateHighlightedSessionStableID(targetSession.stableId)
+            return
+        }
+
+        updateHighlightedSessionStableID(nil)
+        presentExistingAttentionIfNeeded()
+    }
+
+    private func reconcileHighlightedSessionState() {
+        guard interactionModel.bubbleState == .pinned else {
+            updateHighlightedSessionStableID(nil)
+            return
+        }
+
+        guard let highlightedSessionStableID else { return }
+
+        guard let session = sessionMonitor.instances.first(where: {
+            $0.stableId == highlightedSessionStableID
+        }), session.needsManualAttention else {
+            updateHighlightedSessionStableID(nil)
+            return
+        }
+    }
+
+    private func updateHighlightedSessionStableID(_ stableID: String?) {
+        guard highlightedSessionStableID != stableID else { return }
+        highlightedSessionStableID = stableID
+        bubbleViewState.highlightedSessionStableID = stableID
+    }
+
+    private func reconcileBubbleStateWithAvailableContent() {
+        switch interactionModel.bubbleState {
+        case .hidden:
+            return
+        case .hoverPreview:
+            guard DetachedIslandContentModel.canPresentBubble(
+                from: sessionMonitor.instances,
+                mode: .hoverPreview,
+                activeCompletionNotification: activeCompletionNotification
+            ) else {
+                applyBubbleStateChange {
+                    interactionModel.hidePinnedBubble()
+                }
+                return
+            }
+        case .pinned:
+            guard DetachedIslandContentModel.canPresentBubble(
+                from: sessionMonitor.instances,
+                mode: .pinnedList
+            ) else {
+                applyBubbleStateChange {
+                    interactionModel.hidePinnedBubble()
+                }
+                return
+            }
+        }
+    }
+
+    private func syncOutsideClickMonitor() {
+        let shouldMonitorOutsideClicks = interactionModel.bubbleState == .pinned
+            || interactionModel.bubbleState == .hoverPreview
+
+        if shouldMonitorOutsideClicks {
+            guard outsideClickMonitor == nil else { return }
+            let monitor = EventMonitor(mask: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                self?.handlePotentialOutsideClick(event)
+            }
+            monitor.start()
+            outsideClickMonitor = monitor
+        } else {
+            outsideClickMonitor?.stop()
+            outsideClickMonitor = nil
+        }
+    }
+
+    private func handlePotentialOutsideClick(_ event: NSEvent) {
+        let eventLocation = MouseEventReplay.appKitScreenLocation(
+            for: event,
+            fallbackScreenLocation: NSEvent.mouseLocation
+        )
+        handlePotentialOutsideClick(screenLocation: eventLocation)
+    }
+
+    private func handlePotentialOutsideClick(screenLocation eventLocation: CGPoint) {
+        guard interactionModel.bubbleState != .hidden,
+              let window else { return }
+
+        if screenBubbleFrame(for: window).contains(eventLocation) {
+            return
+        }
+
+        if screenPetInteractionFrame(for: window).contains(eventLocation) {
+            return
+        }
+
+        applyBubbleStateChange {
+            interactionModel.hidePinnedBubble()
+        }
+    }
+
+    private func handlePrimaryBubbleTapTransition(
+        from previousState: DetachedIslandBubbleState,
+        to currentState: DetachedIslandBubbleState
+    ) {
+        if currentState != .hidden {
+            dismissFloatingSettingsHint()
+        }
+
+        guard previousState == .hidden else {
+            cancelBubbleHoverGraceTimer()
+            return
+        }
+
+        guard currentState != .hidden else {
+            cancelBubbleHoverGraceTimer()
+            return
+        }
+
+        scheduleBubbleHoverGraceTimer()
+    }
+
+    private func handleBubbleHoverChanged(_ isHovering: Bool) {
+        guard isHovering else { return }
+        cancelBubbleHoverGraceTimer()
+    }
+
+    private func scheduleBubbleHoverGraceTimer() {
+        cancelBubbleHoverGraceTimer()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.bubbleHoverGraceWorkItem = nil
+            guard self.interactionModel.bubbleState != .hidden else { return }
+            self.applyBubbleStateChange {
+                self.interactionModel.hidePinnedBubble()
+            }
+        }
+
+        bubbleHoverGraceWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + bubbleHoverGraceDelay,
+            execute: workItem
+        )
+    }
+
+    private func cancelBubbleHoverGraceTimer() {
+        bubbleHoverGraceWorkItem?.cancel()
+        bubbleHoverGraceWorkItem = nil
+    }
+
+    private func presentFloatingSettingsHintIfNeeded() {
+        guard AppSettings.floatingPetSettingsHintPending else { return }
+
+        AppSettings.floatingPetSettingsHintPending = false
+        floatingSettingsHintDismissWorkItem?.cancel()
+        interactionModel.setSettingsHintVisible(true)
+        scheduleWindowSizeUpdate()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.dismissFloatingSettingsHint()
+        }
+        floatingSettingsHintDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: workItem)
+    }
+
+    private func dismissFloatingSettingsHint() {
+        floatingSettingsHintDismissWorkItem?.cancel()
+        floatingSettingsHintDismissWorkItem = nil
+        guard interactionModel.isSettingsHintVisible else { return }
+        interactionModel.setSettingsHintVisible(false)
+        scheduleWindowSizeUpdate()
+    }
+
+    private func screenBubbleFrame(for window: NSWindow) -> CGRect {
+        guard let bubbleFrame = lastAppliedLayout.bubbleFrame else { return .null }
+        let bubbleWindowFrame = CGRect(
+            x: bubbleFrame.minX,
+            y: lastAppliedLayout.containerSize.height - bubbleFrame.maxY,
+            width: bubbleFrame.width,
+            height: bubbleFrame.height
+        )
+        return bubbleWindowFrame.offsetBy(
+            dx: window.frame.origin.x,
+            dy: window.frame.origin.y
+        )
+    }
+
+    private func screenPetInteractionFrame(for window: NSWindow) -> CGRect {
+        Self.petInteractionFrame(for: lastAppliedLayout).offsetBy(
+            dx: window.frame.origin.x,
+            dy: window.frame.origin.y
+        )
+    }
+
+    private func updateBubblePlacementForCurrentWindow() {
+        guard let window else { return }
+        let petAnchorScreen = Self.petAnchorScreenPoint(
+            for: window.frame,
+            layout: lastAppliedLayout
+        )
+        let resolvedLayout = Self.windowLayout(
+            for: viewModel,
+            sessionMonitor: sessionMonitor,
+            bubbleState: bubbleViewState.renderedBubbleState,
+            bubblePlacement: interactionModel.bubblePlacement,
+            measuredAttentionBubbleHeight: bubbleViewState.measuredAttentionBubbleHeight,
+            measuredCompletionBubbleHeight: bubbleViewState.measuredCompletionBubbleHeight,
+            activeCompletionNotification: activeCompletionNotification,
+            guideBubbleSize: currentGuideBubbleSize,
+            petAnchorScreen: petAnchorScreen,
+            availableFrame: availableFrame(for: petAnchorScreen)
+        )
+        interactionModel.setBubblePlacement(resolvedLayout.bubblePlacement)
+    }
+
+    private func availableFrame(for petAnchor: CGPoint? = nil) -> CGRect {
+        if let screen = window?.screen {
+            return screen.visibleFrame
+        }
+
+        if let petAnchor,
+           let matchingScreen = NSScreen.screens.first(where: {
+               $0.frame.insetBy(dx: -1, dy: -1).contains(petAnchor)
+           }) {
+            return matchingScreen.visibleFrame
+        }
+
+        return viewModel.screenRect
+    }
+
+    private func primeCompletionNotificationTracking(_ instances: [SessionState]) {
+        previousCompletionNotificationPhases = Dictionary(
+            uniqueKeysWithValues: instances.map { ($0.stableId, $0.phase) }
+        )
+        synchronizeCompletionNotifications(with: instances)
+    }
+
+    private func handleCompletionNotificationChange(_ instances: [SessionState]) {
+        synchronizeCompletionNotifications(with: instances)
+
+        if AppSettings.areReminderNotificationsSuppressed {
+            if activeCompletionNotification != nil || !completionNotificationQueue.isEmpty {
+                clearCompletionNotifications(keepBubbleOpen: false)
+            }
+
+            previousCompletionNotificationPhases = Dictionary(
+                uniqueKeysWithValues: instances.map { ($0.stableId, $0.phase) }
+            )
+            return
+        }
+
+        let currentPhases = Dictionary(
+            uniqueKeysWithValues: instances.map { ($0.stableId, $0.phase) }
+        )
+
+        if interactionModel.bubbleState == .pinned && activeCompletionNotification == nil {
+            previousCompletionNotificationPhases = currentPhases
+            completionNotificationQueue.removeAll()
+            return
+        }
+
+        let newNotifications = instances
+            .compactMap { session -> SessionCompletionNotification? in
+                let previousPhase = previousCompletionNotificationPhases[session.stableId]
+
+                if shouldQueueCompactedNotification(for: session, previousPhase: previousPhase) {
+                    return SessionCompletionNotification(session: session, kind: .compacted)
+                }
+
+                if shouldQueueCompletedNotification(for: session, previousPhase: previousPhase) {
+                    return SessionCompletionNotification(session: session, kind: .completed)
+                }
+
+                if shouldQueueEndedNotification(for: session, previousPhase: previousPhase) {
+                    return SessionCompletionNotification(session: session, kind: .ended)
+                }
+
+                return nil
+            }
+            .sorted { $0.session.lastActivity < $1.session.lastActivity }
+
+        for notification in newNotifications {
+            enqueueCompletionNotification(notification)
+        }
+
+        previousCompletionNotificationPhases = currentPhases
+        maybePresentNextCompletionNotification()
+    }
+
+    private func shouldQueueCompletedNotification(
+        for session: SessionState,
+        previousPhase: SessionPhase?
+    ) -> Bool {
+        SessionCompletionNotificationPolicy.shouldQueueCompletedNotification(
+            for: session,
+            previousPhase: previousPhase,
+            isEnabled: AppSettings.autoOpenCompletionPanel
+        )
+    }
+
+    private func shouldQueueEndedNotification(
+        for session: SessionState,
+        previousPhase: SessionPhase?
+    ) -> Bool {
+        SessionCompletionNotificationPolicy.shouldQueueEndedNotification(
+            for: session,
+            previousPhase: previousPhase,
+            isEnabled: AppSettings.autoOpenCompletionPanel
+        )
+    }
+
+    private func shouldQueueCompactedNotification(
+        for session: SessionState,
+        previousPhase: SessionPhase?
+    ) -> Bool {
+        SessionCompletionNotificationPolicy.shouldQueueCompactedNotification(
+            for: session,
+            previousPhase: previousPhase,
+            isEnabled: AppSettings.autoOpenCompactedNotificationPanel
+        )
+    }
+
+    private func synchronizeCompletionNotifications(with instances: [SessionState]) {
+        let sessionsById = Dictionary(uniqueKeysWithValues: instances.map { ($0.stableId, $0) })
+
+        if let active = activeCompletionNotification {
+            if let latest = sessionsById[active.session.stableId] {
+                activeCompletionNotification?.session = latest
+            } else {
+                dismissActiveCompletionNotification(closeBubble: false, advanceQueue: true)
+            }
+        }
+
+        completionNotificationQueue = completionNotificationQueue.compactMap { notification in
+            guard let latest = sessionsById[notification.session.stableId] else { return nil }
+            var updated = notification
+            updated.session = latest
+            return updated
+        }
+    }
+
+    private func enqueueCompletionNotification(_ notification: SessionCompletionNotification) {
+        if let active = activeCompletionNotification,
+           active.session.stableId == notification.session.stableId {
+            activeCompletionNotification?.session = notification.session
+            return
+        }
+
+        if let queuedIndex = completionNotificationQueue.firstIndex(where: {
+            $0.session.stableId == notification.session.stableId
+        }) {
+            var updated = completionNotificationQueue[queuedIndex]
+            updated.session = notification.session
+            completionNotificationQueue[queuedIndex] = updated
+            return
+        }
+
+        completionNotificationQueue.append(notification)
+    }
+
+    private func maybePresentNextCompletionNotification() {
+        guard !AppSettings.areReminderNotificationsSuppressed else { return }
+        guard activeCompletionNotification == nil else { return }
+        guard !completionNotificationQueue.isEmpty else { return }
+        guard case .instances = viewModel.detachedContentType else { return }
+        guard interactionModel.bubbleState != .pinned else { return }
+        guard IslandExpandedRouteResolver.highestPriorityAttentionSession(
+            from: sessionMonitor.instances
+        ) == nil else {
+            return
+        }
+
+        let nextNotification = completionNotificationQueue.removeFirst()
+        activeCompletionNotification = nextNotification
+        applyBubbleStateChange {
+            interactionModel.presentHoverPreview(canPresentBubble: true)
+        }
+        scheduleCompletionNotificationDismissal(for: nextNotification.id)
+    }
+
+    private func scheduleCompletionNotificationDismissal(for notificationID: UUID) {
+        completionNotificationDismissWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.activeCompletionNotification?.id == notificationID else { return }
+            self.dismissActiveCompletionNotification(closeBubble: true, advanceQueue: true)
+        }
+
+        completionNotificationDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + completionNotificationDismissDelay,
+            execute: workItem
+        )
+    }
+
+    private func clearCompletionNotifications(keepBubbleOpen: Bool) {
+        removeCompletionNotifications(matching: { _ in true }, keepBubbleOpen: keepBubbleOpen)
+    }
+
+    private func removeCompletionNotifications(
+        matching shouldRemove: (SessionCompletionNotification.Kind) -> Bool,
+        keepBubbleOpen: Bool
+    ) {
+        completionNotificationQueue.removeAll { shouldRemove($0.kind) }
+
+        if let activeCompletionNotification,
+           shouldRemove(activeCompletionNotification.kind) {
+            dismissActiveCompletionNotification(
+                closeBubble: !keepBubbleOpen,
+                advanceQueue: true
+            )
+        }
+    }
+
+    private func handleCompletionNotificationHover(_ isHovering: Bool) {
+        _ = isHovering
+        guard activeCompletionNotification != nil else {
+            return
+        }
+    }
+
+    private func dismissActiveCompletionNotification(
+        closeBubble: Bool,
+        advanceQueue: Bool
+    ) {
+        completionNotificationDismissWorkItem?.cancel()
+        completionNotificationDismissWorkItem = nil
+
+        guard activeCompletionNotification != nil else {
+            if advanceQueue {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    self?.maybePresentNextCompletionNotification()
+                }
+            }
+            return
+        }
+
+        activeCompletionNotification = nil
+
+        if closeBubble, interactionModel.bubbleState == .hoverPreview {
+            if IslandExpandedRouteResolver.highestPriorityAttentionSession(
+                from: sessionMonitor.instances
+            ) != nil {
+                presentExistingAttentionIfNeeded()
+            } else {
+                applyBubbleStateChange {
+                    interactionModel.hidePinnedBubble()
+                }
+            }
+        }
+
+        if advanceQueue {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.maybePresentNextCompletionNotification()
+            }
+        }
+    }
+
+    private func primeSoundTransitions(_ instances: [SessionState]) {
+        previousProcessingIds = Set(
+            instances
+                .filter(\.phase.contributesToProcessingSoundEdge)
+                .map(\.stableId)
+        )
+        previousAttentionSoundIds = Set(
+            instances
+                .filter(SessionAttentionSoundEvaluator.shouldContributeToAttentionSoundEdge)
+                .map(\.stableId)
+        )
+        previousCompletionSoundIds = Set(
+            instances
+                .filter { SessionCompletionStateEvaluator.isCompletedReadySession($0) }
+                .map(\.stableId)
+        )
+        previousTaskErrorIds = Set(
+            instances.flatMap { session in
+                session.completedErrorToolIDs.map { "\(session.sessionId):\($0)" }
+            }
+        )
+        previousResourceLimitIds = Set(
+            instances
+                .filter { $0.phase == .compacting }
+                .map(\.stableId)
+        )
+        hasPrimedSoundTransitions = true
+    }
+
+    private func handleSessionSoundTransitions(_ instances: [SessionState]) {
+        if !hasPrimedSoundTransitions {
+            primeSoundTransitions(instances)
+            return
+        }
+
+        let processingSessions = instances.filter(\.phase.contributesToProcessingSoundEdge)
+        let attentionSessions = instances.filter(
+            SessionAttentionSoundEvaluator.shouldContributeToAttentionSoundEdge
+        )
+        let completedSessions = instances.filter { SessionCompletionStateEvaluator.isCompletedReadySession($0) }
+        let resourceLimitedSessions = instances.filter {
+            $0.phase == .compacting
+        }
+
+        let newProcessingIds = Set(processingSessions.map(\.stableId))
+        let newAttentionIds = Set(attentionSessions.map(\.stableId))
+        let newCompletedIds = Set(completedSessions.map(\.stableId))
+        let newTaskErrorIds = Set(
+            instances.flatMap { session in
+                session.completedErrorToolIDs.map { "\(session.sessionId):\($0)" }
+            }
+        )
+        let newResourceLimitIds = Set(resourceLimitedSessions.map(\.stableId))
+        let errorDeltaIds = newTaskErrorIds.subtracting(previousTaskErrorIds)
+        let errorSessions = instances.filter { session in
+            session.completedErrorToolIDs.contains { errorDeltaIds.contains("\(session.sessionId):\($0)") }
+        }
+        let completionDeltaIds = newCompletedIds.subtracting(previousCompletionSoundIds)
+        let newlyCompletedSessions = completedSessions.filter { session in
+            completionDeltaIds.contains(session.stableId)
+        }
+
+        let isNewAttention = !newAttentionIds.subtracting(previousAttentionSoundIds).isEmpty
+        let isNewCompletion = !completionDeltaIds.isEmpty
+        let isNewTaskError = !errorDeltaIds.isEmpty
+        let isNewResourceLimit = !newResourceLimitIds.subtracting(previousResourceLimitIds).isEmpty
+
+        if isNewTaskError {
+            playEventSoundIfNeeded(.taskError, sessions: errorSessions)
+        } else if isNewResourceLimit {
+            playEventSoundIfNeeded(.resourceLimit, sessions: resourceLimitedSessions)
+        } else if isNewAttention {
+            playEventSoundIfNeeded(.attentionRequired, sessions: attentionSessions)
+        } else if isNewCompletion {
+            playEventSoundIfNeeded(.taskCompleted, sessions: newlyCompletedSessions)
+        } else if !newProcessingIds.subtracting(previousProcessingIds).isEmpty {
+            playEventSoundIfNeeded(.processingStarted, sessions: processingSessions)
+        }
+
+        previousProcessingIds = newProcessingIds
+        previousAttentionSoundIds = newAttentionIds
+        previousCompletionSoundIds = newCompletedIds
+        previousTaskErrorIds = newTaskErrorIds
+        previousResourceLimitIds = newResourceLimitIds
+    }
+
+    private func playEventSoundIfNeeded(_ event: NotificationEvent, sessions: [SessionState]) {
+        guard AppSettings.soundEnabled else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+            let shouldPlaySound = await self.shouldPlayNotificationSound(for: sessions)
+            if shouldPlaySound {
+                _ = await MainActor.run {
+                    AppSettings.playSound(for: event)
+                }
+            }
+        }
+    }
+
+    private func shouldPlayNotificationSound(for sessions: [SessionState]) async -> Bool {
+        for session in sessions {
+            guard let pid = session.pid else {
+                return true
+            }
+
+            let isFocused = await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid)
+            if !isFocused {
+                return true
+            }
+        }
+
+        return false
+    }
+}
+
+private extension CGRect {
+    var nilIfEmpty: CGRect? {
+        guard !isNull, !isEmpty, width > 0, height > 0 else {
+            return nil
+        }
+
+        return self
+    }
+}

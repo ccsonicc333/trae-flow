@@ -1,0 +1,7 @@
+{
+  "id": "taotao",
+  "displayName": "TaoTao",
+  "description": "A tiny meme-inspired singer pet with a deadpan Tao-style expression, side-swept hair, and white shirt.",
+  "spritesheetPath": "spritesheet.webp",
+  "kind": "person"
+}

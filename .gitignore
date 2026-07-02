@@ -1,0 +1,26 @@
+# Build
+build/
+DerivedData/
+*.xcarchive
+
+# Secrets
+Config/LocalSecrets.xcconfig
+.sparkle-keys/
+
+# macOS
+.DS_Store
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+*.swp
+*.swo
+*~
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Package.resolved
+
+# Misc
+*.log

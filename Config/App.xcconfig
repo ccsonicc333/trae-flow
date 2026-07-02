@@ -1,0 +1,11 @@
+#include? "LocalSecrets.xcconfig"
+
+SPARKLE_APPCAST_URL = $(inherited)
+SPARKLE_PUBLIC_ED_KEY = $(inherited)
+TRAE_FLOW_TELEMETRY_SLS_HOST = $(inherited)
+TRAE_FLOW_TELEMETRY_SLS_PROJECT = $(inherited)
+TRAE_FLOW_TELEMETRY_SLS_LOGSTORE = $(inherited)
+TRAE_FLOW_TELEMETRY_SLS_TOPIC = product-telemetry
+TRAE_FLOW_TELEMETRY_SLS_SOURCE = trae-flow-macos
+TRAE_FLOW_TELEMETRY_DAILY_EVENT_LIMIT = 200
+
