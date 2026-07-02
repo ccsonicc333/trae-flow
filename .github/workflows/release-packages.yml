@@ -1,0 +1,228 @@
+name: Release Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.23.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build & Release
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Release (ad-hoc signed)
+        env:
+          SPARKLE_APPCAST_URL: https://github.com/ccsonicc333/trae-flow/releases/latest/download/appcast.xml
+          SPARKLE_PUBLIC_ED_KEY: aXspUXrD7+jz5Ev1sJURSH3GfkEFt6+JRdCViHVhy1M=
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -project TraeFlow.xcodeproj \
+            -scheme TraeFlow \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGN_IDENTITY=- \
+            "SPARKLE_APPCAST_URL=${SPARKLE_APPCAST_URL}" \
+            "SPARKLE_PUBLIC_ED_KEY=${SPARKLE_PUBLIC_ED_KEY}" \
+            build || {
+              echo "Retrying with stable compiler settings..."
+              rm -rf "$RUNNER_TEMP/DerivedData"
+              xcodebuild \
+                -project TraeFlow.xcodeproj \
+                -scheme TraeFlow \
+                -configuration Release \
+                -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+                CODE_SIGN_IDENTITY=- \
+                SWIFT_OPTIMIZATION_LEVEL=-Onone \
+                SWIFT_COMPILATION_MODE=singlefile \
+                "SPARKLE_APPCAST_URL=${SPARKLE_APPCAST_URL}" \
+                "SPARKLE_PUBLIC_ED_KEY=${SPARKLE_PUBLIC_ED_KEY}" \
+                build
+            }
+
+      - name: Verify app bundle
+        run: |
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release/TRAE FLOW.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: App bundle not found"
+            exit 1
+          fi
+
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "App: $VERSION ($BUILD)"
+        id: version
+
+      - name: Ad-hoc re-sign for distribution
+        run: |
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release/TRAE FLOW.app"
+          codesign --force --deep --sign - \
+            --preserve-metadata=identifier,entitlements \
+            "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+      - name: Package DMG
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release/TRAE FLOW.app"
+          STAGING="$RUNNER_TEMP/dmg-staging"
+          DMG_PATH="$RUNNER_TEMP/TraeFlow-${{ steps.version.outputs.version }}.dmg"
+
+          rm -rf "$STAGING" "$DMG_PATH"
+          mkdir -p "$STAGING"
+          cp -R "$APP_PATH" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+
+          chmod +x scripts/create-styled-dmg.sh
+          TRAE_FLOW_DMG_BACKGROUND_SOURCE=docs/images/trae-flow-dmg-installer-background.png \
+          TRAE_FLOW_DMG_LOGO_SOURCE=docs/images/trae-flow-icon-transparent.svg \
+            scripts/create-styled-dmg.sh \
+              --volname "TRAE FLOW" \
+              --source "$STAGING" \
+              --output "$DMG_PATH" \
+              --app-name "TRAE FLOW.app"
+
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+          ls -lh "$DMG_PATH"
+        id: dmg
+
+      - name: Download Sparkle tools
+        run: |
+          SPARKLE_VERSION="2.9.1"
+          SPARKLE_URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-for-Swift-Package-Manager.zip"
+
+          curl -L -o "$RUNNER_TEMP/sparkle.zip" "$SPARKLE_URL"
+          unzip -o "$RUNNER_TEMP/sparkle.zip" -d "$RUNNER_TEMP/sparkle"
+          chmod +x "$RUNNER_TEMP/sparkle/bin/generate_appcast"
+
+          echo "sparkle_bin=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_OUTPUT"
+        id: sparkle
+
+      - name: Generate Sparkle appcast
+        if: env.SPARKLE_PRIVATE_ED_KEY != ''
+        env:
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          DMG_PATH="${{ steps.dmg.outputs.dmg_path }}"
+
+          # Write private key to temp file
+          echo "$SPARKLE_PRIVATE_ED_KEY" > "$RUNNER_TEMP/sparkle_private_key"
+
+          APPCAST_DIR="$RUNNER_TEMP/appcast"
+          mkdir -p "$APPCAST_DIR"
+
+          # Copy DMG to appcast dir
+          cp "$DMG_PATH" "$APPCAST_DIR/"
+
+          # Generate release notes from recent commits since last tag
+          DMG_NAME="$(basename "$DMG_PATH" .dmg)"
+          NOTES_FILE="$APPCAST_DIR/$DMG_NAME.md"
+
+          {
+            echo "## TRAE FLOW ${{ steps.version.outputs.version }} (Build ${{ steps.version.outputs.build }})"
+            echo ""
+            echo "<!-- zh-Hans -->"
+            LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [ -n "$LAST_TAG" ]; then
+              echo "### 变更记录"
+              echo ""
+              git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
+                echo "- $line"
+              done
+            else
+              echo "### 首次发布"
+              echo ""
+              echo "- TRAE FLOW ${{ steps.version.outputs.version }} 发布"
+            fi
+            echo ""
+            echo "<!-- en -->"
+            echo "## TRAE FLOW ${{ steps.version.outputs.version }} (Build ${{ steps.version.outputs.build }})"
+            echo ""
+            if [ -n "$LAST_TAG" ]; then
+              echo "### Changes"
+              echo ""
+              git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
+                echo "- $line"
+              done
+            else
+              echo "### First Release"
+              echo ""
+              echo "- TRAE FLOW ${{ steps.version.outputs.version }} release"
+            fi
+          } > "$NOTES_FILE"
+
+          echo "Release notes:"
+          head -20 "$NOTES_FILE"
+
+          "${{ steps.sparkle.outputs.sparkle_bin }}/generate_appcast" \
+            --ed-key-file "$RUNNER_TEMP/sparkle_private_key" \
+            --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/" \
+            -o "$APPCAST_DIR/appcast.xml" \
+            "$APPCAST_DIR"
+
+          echo "appcast_dir=$APPCAST_DIR" >> "$GITHUB_OUTPUT"
+          echo "Appcast generated:"
+          head -20 "$APPCAST_DIR/appcast.xml"
+        id: appcast
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          draft: true
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          files: ${{ steps.dmg.outputs.dmg_path }}
+          body: |
+            ## TRAE FLOW ${{ steps.version.outputs.version }}
+
+            Build ${{ steps.version.outputs.build }}
+
+            **注意：此版本未经过 Apple 公证**，首次打开请右键 → 打开，或运行：
+
+            ```bash
+            xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload appcast to Release
+        if: steps.appcast.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          draft: true
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          files: ${{ steps.appcast.outputs.appcast_dir }}/appcast.xml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

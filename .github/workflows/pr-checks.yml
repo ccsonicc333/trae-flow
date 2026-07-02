@@ -1,0 +1,62 @@
+name: PR Checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run prototype tests
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/prototype-ci"
+          swift test --package-path Prototype \
+            --skip IslandBridgeE2ETests \
+            --skip SocketServerTests \
+            2>&1 | tee "$RUNNER_TEMP/prototype-ci/01-run-tests.log"
+
+      - name: Run Xcode unit tests
+        run: >
+          xcodebuild
+          -project TraeFlow.xcodeproj
+          -scheme TraeFlow
+          -configuration Debug
+          -destination 'platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/DerivedData"
+          -resultBundlePath "$RUNNER_TEMP/TraeFlowTests.xcresult"
+          CODE_SIGNING_ALLOWED=NO
+          test
+          -only-testing:TraeFlowTests
+
+      - name: Upload prototype diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prototype-ci-logs
+          path: ${{ runner.temp }}/prototype-ci
+          if-no-files-found: ignore
+
+      - name: Upload unit test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TraeFlowTests-xcresult
+          path: ${{ runner.temp }}/TraeFlowTests.xcresult
+          if-no-files-found: ignore
