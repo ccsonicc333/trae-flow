@@ -55,6 +55,11 @@ class NotchViewModel: ObservableObject {
     @Published private(set) var detachedContentType: NotchContentType = .instances
     /// 分离态专用测量高度，与 docked 的 openedMeasuredHeight 解耦。
     @Published private(set) var detachedOpenedMeasuredHeight: CGFloat?
+    /// 用户通过左下角/右下角拖拽实时调整展开面板尺寸时的临时覆盖值。
+    /// 拖拽期间优先于 per-feature / 全局设置，拖拽结束时写回 LeftFeatureStore。
+    @Published private(set) var openedSizeOverride: CGSize?
+    /// 展开面板尺寸拖拽中：保持窗口接收鼠标事件，避免鼠标移出内容区后事件被截断。
+    @Published private(set) var isResizingOpenedPanel: Bool = false
     @Published private(set) var isFullscreenEdgeRevealActive = false
     @Published private(set) var isFullscreenPhysicalNotchCompactActive = false
     @Published private(set) var isFullscreenBrowserHiddenActive = false
@@ -172,6 +177,16 @@ class NotchViewModel: ObservableObject {
     }
 
     func panelSize(for style: IslandOpenedPresentationStyle) -> CGSize {
+        // 手动拖拽调整展开尺寸期间，使用实时覆盖值，绕过 per-feature / 全局设置。
+        if let override = openedSizeOverride {
+            let horizontalInset: CGFloat = style == .detached ? 96 : 64
+            let verticalInset: CGFloat = style == .detached ? 180 : 120
+            return CGSize(
+                width: min(screenRect.width - horizontalInset, max(200, override.width)),
+                height: min(screenRect.height - verticalInset, max(100, override.height))
+            )
+        }
+
         let maxAllowedHeight = maximumOpenedHeight
 
         // 读取当前激活功能的 per-feature 展开尺寸覆盖（nil = 跟随全局）
@@ -249,6 +264,11 @@ class NotchViewModel: ObservableObject {
     }
 
     private var maximumOpenedHeight: CGFloat {
+        // 手动拖拽调整展开尺寸期间，高度上限使用实时覆盖值。
+        if let override = openedSizeOverride {
+            return min(screenRect.height - 120, override.height)
+        }
+
         // 读取当前激活功能的 per-feature 展开高度覆盖（nil = 跟随全局）
         let activeFeature = LeftFeatureStore.shared.expandedActiveFeature
         let featureHeight: Double = activeFeature?.expandedHeight ?? AppSettings.maxPanelHeight
@@ -973,6 +993,16 @@ class NotchViewModel: ObservableObject {
         if playSound {
             AppSettings.playDetachedCapsuleSound()
         }
+    }
+
+    func setOpenedSizeOverride(_ size: CGSize?) {
+        guard openedSizeOverride != size else { return }
+        openedSizeOverride = size
+    }
+
+    func setResizingOpenedPanel(_ resizing: Bool) {
+        guard isResizingOpenedPanel != resizing else { return }
+        isResizingOpenedPanel = resizing
     }
 
     func setDetachedDisplayMode(_ mode: DetachedIslandDisplayMode) {

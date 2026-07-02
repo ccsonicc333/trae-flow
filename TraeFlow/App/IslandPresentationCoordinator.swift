@@ -15,6 +15,13 @@ final class IslandPresentationCoordinator {
     private var activeDetachmentPayload: IslandDetachmentPayload?
     private var cancellables = Set<AnyCancellable>()
 
+    #if DEBUG
+    /// 测试用：记录 recreateDockedWindow 调用次数，用于验证 redock 不重入。
+    private(set) var dockedWindowRecreationCount = 0
+    /// 测试用：暴露当前 docked 窗口控制器，便于验证复用逻辑。
+    var dockedWindowControllerForTesting: NotchWindowController? { dockedWindowController }
+    #endif
+
     init(screen: NSScreen, previousViewModel: NotchViewModel? = nil) {
         self.screen = screen
         self.viewModel = previousViewModel ?? Self.makeViewModel(for: screen)
@@ -139,9 +146,17 @@ final class IslandPresentationCoordinator {
         detachedWindowController = nil
         activeDetachmentPayload = nil
 
-        AppSettings.surfaceMode = .notch
+        // 先把 viewModel 切回 docked，再同步 surfaceMode。
+        // 分离期间 docked 窗口一直保留，拖回时无需重建；
+        // 同步刷新窗口可见性，避免依赖 settings publisher 的异步投递导致状态错乱。
         viewModel.redockAfterDetached()
-        recreateDockedWindow(performBootAnimation: false)
+        AppSettings.surfaceMode = .notch
+
+        if dockedWindowController == nil {
+            recreateDockedWindow(performBootAnimation: false)
+        } else {
+            dockedWindowController?.refreshVisibility()
+        }
     }
 
     func invalidate() {
@@ -190,7 +205,13 @@ final class IslandPresentationCoordinator {
             viewModel.redockAfterDetached()
         }
 
-        recreateDockedWindow(performBootAnimation: performBootAnimation)
+        // 若 docked 窗口已存在则直接复用，避免反复创建/销毁窗口导致
+        // 事件路由、订阅或 ignoresMouseEvents 状态错乱。
+        if dockedWindowController == nil {
+            recreateDockedWindow(performBootAnimation: performBootAnimation)
+        } else {
+            dockedWindowController?.showWindow(nil as Any?)
+        }
     }
 
     private func presentFloatingPet(
@@ -273,6 +294,10 @@ final class IslandPresentationCoordinator {
     }
 
     private func recreateDockedWindow(performBootAnimation: Bool) {
+        #if DEBUG
+        dockedWindowRecreationCount += 1
+        #endif
+
         if let controller = dockedWindowController {
             controller.window?.contentViewController = nil
             controller.window?.orderOut(nil)

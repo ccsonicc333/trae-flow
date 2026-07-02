@@ -24,3 +24,6 @@ Package.resolved
 
 # Misc
 *.log
+
+# Override global *.zip ignore for bundled resources
+!TraeFlow/Resources/MediaRemoteAdapter.zip

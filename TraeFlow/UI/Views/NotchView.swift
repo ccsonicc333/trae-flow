@@ -540,6 +540,11 @@ struct NotchView: View {
                     .frame(height: 1)
                     .padding(.horizontal, topCornerRadius)
             }
+            .overlay {
+                if isOpened && viewModel.contentType == .customExpanded {
+                    panelResizeEdges
+                }
+            }
             .shadow(color: shadowColor, radius: 6)
             .frame(
                 maxWidth: isOpened ? notchSize.width : nil,
@@ -547,7 +552,8 @@ struct NotchView: View {
                 alignment: .top
             )
             .animation(isOpened ? openAnimation : closeAnimation, value: viewModel.status)
-            .animation(viewModel.closedNotchResizeAnimation, value: notchSize)
+            // 手动拖拽调整展开尺寸时禁用弹簧动画，确保尺寸跟随手指/光标实时变化。
+            .animation(viewModel.openedSizeOverride == nil ? viewModel.closedNotchResizeAnimation : .none, value: notchSize)
             .animation(.smooth, value: activityCoordinator.expandingActivity)
             .animation(.smooth, value: hasPendingPermission)
             .animation(.smooth, value: hasHumanIntervention)
@@ -911,6 +917,25 @@ struct NotchView: View {
         )
         .frame(width: notchSize.width - 24) // Fixed width to prevent text reflow
         // Removed .id() - was causing view recreation and performance issues
+    }
+
+    // MARK: - Panel Resize Corners
+
+    /// 展开面板左下角/右下角的淡淡圆角拖拽指示器，覆盖在黑边区域上方。
+    /// 拖拽时实时调整 `NotchViewModel.openedSizeOverride`，松手后写回当前功能的自定义尺寸。
+    private var panelResizeEdges: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            ZStack {
+                ResizeCornerHandle(anchor: .bottomLeading, viewModel: viewModel)
+                    .frame(width: 28, height: 28)
+                    .position(x: 14, y: size.height - 14)
+
+                ResizeCornerHandle(anchor: .bottomTrailing, viewModel: viewModel)
+                    .frame(width: 28, height: 28)
+                    .position(x: size.width - 14, y: size.height - 14)
+            }
+        }
     }
 
     private var triggerForCurrentPresentation: IslandExpandedTrigger {
@@ -1878,5 +1903,122 @@ private struct SessionCountIndicator: View {
         )
         .frame(minWidth: 18)
         .offset(x: closedNotchRightShift)
+    }
+}
+
+// MARK: - Panel Resize Corner Handle
+
+/// 展开面板左下角/右下角的圆角拖拽指示器。显示淡淡的四分之一圆角，
+/// 拖拽时通过 `NotchViewModel.openedSizeOverride` 实时预览尺寸，拖拽结束时将尺寸持久化到
+/// `LeftFeatureStore` 当前功能的 `expandedWidth` / `expandedHeight`。
+private struct ResizeCornerHandle: View {
+    enum Anchor {
+        case bottomLeading
+        case bottomTrailing
+    }
+
+    let anchor: Anchor
+    @ObservedObject var viewModel: NotchViewModel
+
+    @ObservedObject private var featureStore = LeftFeatureStore.shared
+    @State private var startSize: CGSize = .zero
+    @State private var isDragging: Bool = false
+
+    private var isLeading: Bool { anchor == .bottomLeading }
+    private var currentFeature: LeftFeature? { featureStore.expandedActiveFeature }
+
+    var body: some View {
+        ZStack {
+            ResizeCornerIndicator(anchor: anchor)
+                .fill(Color.white.opacity(0.16))
+                .frame(width: 18, height: 18)
+
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(dragGesture)
+        }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                if !isDragging {
+                    isDragging = true
+                    startSize = viewModel.openedSize
+                    viewModel.setResizingOpenedPanel(true)
+                }
+
+                let widthDelta = isLeading ? -value.translation.width : value.translation.width
+                let heightDelta = value.translation.height
+                let next = CGSize(
+                    width: startSize.width + widthDelta,
+                    height: startSize.height + heightDelta
+                )
+                viewModel.setOpenedSizeOverride(clampedSize(next))
+            }
+            .onEnded { _ in
+                let finalSize = viewModel.openedSizeOverride ?? viewModel.openedSize
+                persistSize(finalSize)
+                startSize = .zero
+                isDragging = false
+                viewModel.setOpenedSizeOverride(nil)
+                viewModel.setResizingOpenedPanel(false)
+            }
+    }
+
+    private func clampedSize(_ size: CGSize) -> CGSize {
+        CGSize(
+            width: min(max(size.width, 200), viewModel.screenRect.width - 64),
+            height: min(max(size.height, 120), viewModel.screenRect.height - 120)
+        )
+    }
+
+    private func persistSize(_ size: CGSize) {
+        guard let feature = currentFeature else { return }
+
+        let globalWidth = CGFloat(AppSettings.expandedPanelWidth)
+        let globalHeight = CGFloat(AppSettings.maxPanelHeight)
+
+        let width: Double? = abs(size.width - globalWidth) > 0.5 ? Double(size.width) : nil
+        let height: Double? = abs(size.height - globalHeight) > 0.5 ? Double(size.height) : nil
+
+        featureStore.setExpandedSize(id: feature.id, width: width, height: height)
+    }
+}
+
+/// 左下角/右下角四分之一圆角指示器。
+private struct ResizeCornerIndicator: Shape {
+    let anchor: ResizeCornerHandle.Anchor
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let radius = min(rect.width, rect.height)
+
+        switch anchor {
+        case .bottomLeading:
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
+            path.addArc(
+                center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius),
+                radius: radius,
+                startAngle: .degrees(180),
+                endAngle: .degrees(90),
+                clockwise: true
+            )
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.closeSubpath()
+        case .bottomTrailing:
+            path.move(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
+            path.addArc(
+                center: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius),
+                radius: radius,
+                startAngle: .degrees(0),
+                endAngle: .degrees(90),
+                clockwise: false
+            )
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.closeSubpath()
+        }
+
+        return path
     }
 }
