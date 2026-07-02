@@ -10,12 +10,22 @@ on:
         description: 'Release tag (e.g. v0.23.1)'
         required: true
         type: string
+      draft:
+        description: 'Keep the GitHub Release in draft state'
+        required: false
+        default: true
+        type: boolean
+      prerelease:
+        description: 'Mark the GitHub Release as a prerelease'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-packages-${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -23,10 +33,18 @@ jobs:
     name: Build & Release
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.draft) || 'true' }}
+      RELEASE_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.prerelease) || 'false' }}
 
     steps:
-      - name: Checkout
+      - name: Checkout tagged source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Resolve tag
         id: tag
@@ -69,6 +87,7 @@ jobs:
             }
 
       - name: Verify app bundle
+        id: version
         run: |
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release/TRAE FLOW.app"
           if [ ! -d "$APP_PATH" ]; then
@@ -81,67 +100,13 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
           echo "App: $VERSION ($BUILD)"
-        id: version
 
-      - name: Generate release notes
-        id: notes
-        run: |
-          set -euo pipefail
-
-          VERSION="${{ steps.version.outputs.version }}"
-          BUILD="${{ steps.version.outputs.build }}"
-          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
-          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-          {
-            echo "## TRAE FLOW $VERSION (Build $BUILD)"
-            echo ""
-            echo "<!-- zh-Hans -->"
-            if [ -n "$LAST_TAG" ]; then
-              echo "### 变更记录"
-              echo ""
-              git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
-                echo "- $line"
-              done
-            else
-              echo "### 首次发布"
-              echo ""
-              echo "- TRAE FLOW $VERSION 发布"
-            fi
-            echo ""
-            echo "<!-- en -->"
-            echo "## TRAE FLOW $VERSION (Build $BUILD)"
-            echo ""
-            if [ -n "$LAST_TAG" ]; then
-              echo "### Changes"
-              echo ""
-              git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
-                echo "- $line"
-              done
-            else
-              echo "### First Release"
-              echo ""
-              echo "- TRAE FLOW $VERSION release"
-            fi
-            echo ""
-            echo "---"
-            echo ""
-            echo "**注意：此版本未经过 Apple 公证**，首次打开请右键 → 打开，或运行："
-            echo ""
-            echo '```bash'
-            echo "xattr -d com.apple.quarantine /Applications/TRAE\\ FLOW.app"
-            echo '```'
-            echo ""
-            echo "**Note: This build is not notarized by Apple.** Right-click the app and select Open on first launch, or run:"
-            echo ""
-            echo '```bash'
-            echo "xattr -d com.apple.quarantine /Applications/TRAE\\ FLOW.app"
-            echo '```'
-          } > "$NOTES_FILE"
-
-          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
-          echo "Generated release notes:"
-          cat "$NOTES_FILE"
+          # Validate tag matches app version (ping-island pattern)
+          expected_tag="v$VERSION"
+          if [ "$RELEASE_TAG" != "$expected_tag" ]; then
+            echo "::error::Release tag $RELEASE_TAG does not match app version $VERSION"
+            exit 1
+          fi
 
       - name: Ad-hoc re-sign for distribution
         run: |
@@ -152,6 +117,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
       - name: Package DMG
+        id: dmg
         run: |
           set -euo pipefail
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release/TRAE FLOW.app"
@@ -174,9 +140,9 @@ jobs:
 
           echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
           ls -lh "$DMG_PATH"
-        id: dmg
 
       - name: Download Sparkle tools
+        id: sparkle
         run: |
           SPARKLE_VERSION="2.9.1"
           SPARKLE_URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-for-Swift-Package-Manager.zip"
@@ -186,9 +152,89 @@ jobs:
           chmod +x "$RUNNER_TEMP/sparkle/bin/generate_appcast"
 
           echo "sparkle_bin=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_OUTPUT"
-        id: sparkle
+
+      - name: Prepare release notes body
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          BUILD="${{ steps.version.outputs.build }}"
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+
+          # ping-island pattern: prefer manually-authored notes at releases/notes/$VERSION.md
+          AUTHORED_NOTES="releases/notes/$VERSION.md"
+
+          # Build block appended to every release (ping-island pattern)
+          RELEASE_BLOCK='> Built (ad-hoc signed) on GitHub Actions. Not notarized by Apple.'
+
+          if [ -f "$AUTHORED_NOTES" ]; then
+            echo "Using authored release notes from $AUTHORED_NOTES"
+            cp "$AUTHORED_NOTES" "$NOTES_FILE"
+            printf '\n\n%s\n' "$RELEASE_BLOCK" >> "$NOTES_FILE"
+          else
+            # Fallback: auto-generate from commits since last tag (zh + en)
+            LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+            {
+              echo "## TRAE FLOW $VERSION (Build $BUILD)"
+              echo ""
+              echo "<!-- zh-Hans -->"
+              if [ -n "$LAST_TAG" ]; then
+                echo "### 变更记录"
+                echo ""
+                git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
+                  echo "- $line"
+                done
+              else
+                echo "### 首次发布"
+                echo ""
+                echo "- TRAE FLOW $VERSION 发布"
+              fi
+              echo ""
+              echo "<!-- en -->"
+              echo "## TRAE FLOW $VERSION (Build $BUILD)"
+              echo ""
+              if [ -n "$LAST_TAG" ]; then
+                echo "### Changes"
+                echo ""
+                git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
+                  echo "- $line"
+                done
+              else
+                echo "### First Release"
+                echo ""
+                echo "- TRAE FLOW $VERSION release"
+              fi
+              echo ""
+              echo "---"
+              echo ""
+              echo "Included assets:"
+              echo "- $(basename "${{ steps.dmg.outputs.dmg_path }}") (recommended for manual install)"
+              echo ""
+              echo "**注意：此版本未经过 Apple 公证**，首次打开请右键 → 打开，或运行："
+              echo ""
+              echo '```bash'
+              echo "xattr -d com.apple.quarantine /Applications/TRAE\\ FLOW.app"
+              echo '```'
+              echo ""
+              echo "**Note: This build is not notarized by Apple.** Right-click the app and select Open on first launch, or run:"
+              echo ""
+              echo '```bash'
+              echo "xattr -d com.apple.quarantine /Applications/TRAE\\ FLOW.app"
+              echo '```'
+              echo ""
+              printf '%s\n' "$RELEASE_BLOCK"
+            } > "$NOTES_FILE"
+          fi
+
+          echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+          echo "Prepared release notes:"
+          cat "$NOTES_FILE"
 
       - name: Generate Sparkle appcast
+        id: appcast
         if: env.SPARKLE_PRIVATE_ED_KEY != ''
         env:
           SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
@@ -204,12 +250,12 @@ jobs:
           # Copy DMG to appcast dir
           cp "$DMG_PATH" "$APPCAST_DIR/"
 
-          # Copy pre-generated release notes next to the DMG for Sparkle
+          # Copy prepared release notes next to the DMG for Sparkle
           DMG_NAME="$(basename "$DMG_PATH" .dmg)"
           APPCAST_NOTES_FILE="$APPCAST_DIR/$DMG_NAME.md"
-          cp "${{ steps.notes.outputs.notes_file }}" "$APPCAST_NOTES_FILE"
+          cp "${{ steps.notes.outputs.file }}" "$APPCAST_NOTES_FILE"
 
-          echo "Release notes:"
+          echo "Release notes for appcast:"
           head -40 "$APPCAST_NOTES_FILE"
 
           "${{ steps.sparkle.outputs.sparkle_bin }}/generate_appcast" \
@@ -221,27 +267,63 @@ jobs:
           echo "appcast_dir=$APPCAST_DIR" >> "$GITHUB_OUTPUT"
           echo "Appcast generated:"
           head -20 "$APPCAST_DIR/appcast.xml"
-        id: appcast
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: ${{ steps.tag.outputs.tag }}
-          draft: true
-          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
-          files: ${{ steps.dmg.outputs.dmg_path }}
-          body_path: ${{ steps.notes.outputs.notes_file }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create or update GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Upload appcast to Release
-        if: steps.appcast.outcome == 'success'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          draft: true
-          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
-          files: ${{ steps.appcast.outputs.appcast_dir }}/appcast.xml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          repo="$GITHUB_REPOSITORY"
+
+          retry() {
+            local attempts=0
+            local max_attempts=3
+            local delay=5
+
+            until "$@"; do
+              attempts=$((attempts + 1))
+              if [ "$attempts" -ge "$max_attempts" ]; then
+                return 1
+              fi
+
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+
+          ensure_release_exists() {
+            gh release view "$RELEASE_TAG" --repo "$repo" >/dev/null 2>&1 && return 0
+
+            # Create the release as a draft first so a failed asset upload can be resumed
+            # by rerunning the workflow instead of leaving gh release create half-finished.
+            gh release create "$RELEASE_TAG" \
+              --repo "$repo" \
+              --verify-tag \
+              --draft \
+              --title "TRAE FLOW $RELEASE_TAG" \
+              --notes-file "${{ steps.notes.outputs.file }}"
+          }
+
+          retry ensure_release_exists
+
+          assets=(
+            "${{ steps.dmg.outputs.dmg_path }}"
+          )
+
+          if [ "${{ steps.appcast.outcome }}" = "success" ]; then
+            assets+=("${{ steps.appcast.outputs.appcast_dir }}/appcast.xml")
+          fi
+
+          retry gh release upload "$RELEASE_TAG" \
+            "${assets[@]}" \
+            --repo "$repo" \
+            --clobber
+
+          retry gh release edit "$RELEASE_TAG" \
+            --repo "$repo" \
+            --title "TRAE FLOW $RELEASE_TAG" \
+            --notes-file "${{ steps.notes.outputs.file }}" \
+            --draft="$RELEASE_DRAFT" \
+            --prerelease="$RELEASE_PRERELEASE"
+
+          gh release view "$RELEASE_TAG" --repo "$repo"
