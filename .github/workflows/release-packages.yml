@@ -83,6 +83,66 @@ jobs:
           echo "App: $VERSION ($BUILD)"
         id: version
 
+      - name: Generate release notes
+        id: notes
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          BUILD="${{ steps.version.outputs.build }}"
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          {
+            echo "## TRAE FLOW $VERSION (Build $BUILD)"
+            echo ""
+            echo "<!-- zh-Hans -->"
+            if [ -n "$LAST_TAG" ]; then
+              echo "### 变更记录"
+              echo ""
+              git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
+                echo "- $line"
+              done
+            else
+              echo "### 首次发布"
+              echo ""
+              echo "- TRAE FLOW $VERSION 发布"
+            fi
+            echo ""
+            echo "<!-- en -->"
+            echo "## TRAE FLOW $VERSION (Build $BUILD)"
+            echo ""
+            if [ -n "$LAST_TAG" ]; then
+              echo "### Changes"
+              echo ""
+              git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
+                echo "- $line"
+              done
+            else
+              echo "### First Release"
+              echo ""
+              echo "- TRAE FLOW $VERSION release"
+            fi
+            echo ""
+            echo "---"
+            echo ""
+            echo "**注意：此版本未经过 Apple 公证**，首次打开请右键 → 打开，或运行："
+            echo ""
+            echo '```bash'
+            echo "xattr -d com.apple.quarantine /Applications/TRAE\\ FLOW.app"
+            echo '```'
+            echo ""
+            echo "**Note: This build is not notarized by Apple.** Right-click the app and select Open on first launch, or run:"
+            echo ""
+            echo '```bash'
+            echo "xattr -d com.apple.quarantine /Applications/TRAE\\ FLOW.app"
+            echo '```'
+          } > "$NOTES_FILE"
+
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+          echo "Generated release notes:"
+          cat "$NOTES_FILE"
+
       - name: Ad-hoc re-sign for distribution
         run: |
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release/TRAE FLOW.app"
@@ -144,45 +204,13 @@ jobs:
           # Copy DMG to appcast dir
           cp "$DMG_PATH" "$APPCAST_DIR/"
 
-          # Generate release notes from recent commits since last tag
+          # Copy pre-generated release notes next to the DMG for Sparkle
           DMG_NAME="$(basename "$DMG_PATH" .dmg)"
-          NOTES_FILE="$APPCAST_DIR/$DMG_NAME.md"
-
-          {
-            echo "## TRAE FLOW ${{ steps.version.outputs.version }} (Build ${{ steps.version.outputs.build }})"
-            echo ""
-            echo "<!-- zh-Hans -->"
-            LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-            if [ -n "$LAST_TAG" ]; then
-              echo "### 变更记录"
-              echo ""
-              git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
-                echo "- $line"
-              done
-            else
-              echo "### 首次发布"
-              echo ""
-              echo "- TRAE FLOW ${{ steps.version.outputs.version }} 发布"
-            fi
-            echo ""
-            echo "<!-- en -->"
-            echo "## TRAE FLOW ${{ steps.version.outputs.version }} (Build ${{ steps.version.outputs.build }})"
-            echo ""
-            if [ -n "$LAST_TAG" ]; then
-              echo "### Changes"
-              echo ""
-              git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
-                echo "- $line"
-              done
-            else
-              echo "### First Release"
-              echo ""
-              echo "- TRAE FLOW ${{ steps.version.outputs.version }} release"
-            fi
-          } > "$NOTES_FILE"
+          APPCAST_NOTES_FILE="$APPCAST_DIR/$DMG_NAME.md"
+          cp "${{ steps.notes.outputs.notes_file }}" "$APPCAST_NOTES_FILE"
 
           echo "Release notes:"
-          head -20 "$NOTES_FILE"
+          head -40 "$APPCAST_NOTES_FILE"
 
           "${{ steps.sparkle.outputs.sparkle_bin }}/generate_appcast" \
             --ed-key-file "$RUNNER_TEMP/sparkle_private_key" \
@@ -203,16 +231,7 @@ jobs:
           draft: true
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
           files: ${{ steps.dmg.outputs.dmg_path }}
-          body: |
-            ## TRAE FLOW ${{ steps.version.outputs.version }}
-
-            Build ${{ steps.version.outputs.build }}
-
-            **注意：此版本未经过 Apple 公证**，首次打开请右键 → 打开，或运行：
-
-            ```bash
-            xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
-            ```
+          body_path: ${{ steps.notes.outputs.notes_file }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
