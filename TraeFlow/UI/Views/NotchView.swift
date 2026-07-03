@@ -66,6 +66,8 @@ struct NotchView: View {
     @State private var previousTaskErrorIds: Set<String> = []
     @State private var previousResourceLimitIds: Set<String> = []
     @State private var previousCompletionNotificationPhases: [String: SessionPhase] = [:]
+    /// Spec: 跟踪所有 session 的上一个 phase，用于检测任务从活跃→完成的转换并自动展开任务列表。
+    @State private var previousSessionPhases: [String: SessionPhase] = [:]
     @State private var completionNotificationQueue: [SessionCompletionNotification] = []
     @State private var activeCompletionNotification: SessionCompletionNotification?
     @State private var completionNotificationDismissWorkItem: DispatchWorkItem?
@@ -401,16 +403,6 @@ struct NotchView: View {
 
     private var settingsAwareBody: some View {
         lifecycleBody
-            .onChange(of: settings.autoOpenCompletionPanel) { _, isEnabled in
-                if !isEnabled {
-                    removeCompletionNotifications(
-                        matching: { $0 == .completed || $0 == .ended },
-                        keepPanelOpen: true
-                    )
-                } else {
-                    maybePresentNextCompletionNotification()
-                }
-            }
             .onChange(of: settings.autoOpenCompactedNotificationPanel) { _, isEnabled in
                 if !isEnabled {
                     removeCompletionNotifications(
@@ -449,6 +441,7 @@ struct NotchView: View {
                 handleSessionSoundTransitions(instances)
                 handleManualAttentionChange(instances)
                 handleCompletedReadyChange(instances)
+                handleSessionPhaseTransitions(instances)
                 handleCompletionNotificationChange(instances)
             }
     }
@@ -1212,6 +1205,9 @@ struct NotchView: View {
                 .filter { SessionCompletionStateEvaluator.isCompletedReadySession($0) }
                 .map(\.stableId)
         )
+        previousSessionPhases = Dictionary(
+            uniqueKeysWithValues: instances.map { ($0.stableId, $0.phase) }
+        )
         _ = manualAttentionTracker.consumeNewAttentionSession(from: instances)
         primeCompletionNotificationTracking(instances)
     }
@@ -1309,6 +1305,11 @@ struct NotchView: View {
         previousCompletedReadyIds = completedIds
 
         if !newCompletedIds.isEmpty {
+            // Spec: 任务完成后自动展开任务列表（会话列表），保持 Flow 岛始终显示。
+            // 完成自动展开现为默认行为（旧 autoOpenCompletionPanel 设置已移除），无条件展开。
+            // 不在用户正在交互（hover/inline input/settings popover）时强制切换，避免打断输入。
+            presentSessionListOnCompletionIfNeeded()
+
             // Trigger bounce animation to get user's attention
             DispatchQueue.main.async {
                 isBouncing = true
@@ -1324,6 +1325,67 @@ struct NotchView: View {
                 handleProcessingChange()
             }
         }
+    }
+
+    /// Spec: 任务完成时自动展开 Flow 岛并显示会话列表。
+    /// 无条件展开面板，确保任务完成后 Flow 岛始终可见且显示任务列表。
+    private func presentSessionListOnCompletionIfNeeded() {
+        // 清空通知队列与活动通知，避免残留触发旧的 dismiss 流程
+        completionNotificationQueue.removeAll()
+        if activeCompletionNotification != nil {
+            activeCompletionNotification = nil
+            completionNotificationDismissWorkItem?.cancel()
+            completionNotificationDismissWorkItem = nil
+            shouldDismissCompletionNotificationOnHoverExit = false
+        }
+
+        if viewModel.status == .opened {
+            // 已展开：若当前不是会话列表则切换过去
+            if case .instances = viewModel.contentType {
+                return
+            }
+            viewModel.exitChat()
+            viewModel.openReason = .notification
+        } else {
+            // 未展开：直接展开并显示会话列表，绕过 shouldSuppressAutomaticPresentation
+            viewModel.exitChat()
+            viewModel.openReason = .notification
+            viewModel.status = .opened
+        }
+
+        // 确保 Flow 岛可见
+        isVisible = true
+    }
+
+    /// Spec: 检测 session phase 从活跃状态（processing/compacting/waitingForApproval）
+    /// 到完成状态（waitingForInput/ended/idle）的转换，任务完成时自动展开任务列表。
+    /// 覆盖 `handleCompletedReadyChange` 未处理的 `.ended` 场景（TRAE Stop 事件）。
+    private func handleSessionPhaseTransitions(_ instances: [SessionState]) {
+        var newlyCompletedSessions: [SessionState] = []
+
+        for session in instances {
+            let previousPhase = previousSessionPhases[session.stableId]
+            guard let previousPhase = previousPhase else {
+                continue
+            }
+
+            // 仅当从活跃状态转换为完成状态时触发
+            if previousPhase.isActive || previousPhase.isWaitingForApproval {
+                if !session.phase.isActive && !session.phase.isWaitingForApproval {
+                    newlyCompletedSessions.append(session)
+                }
+            }
+        }
+
+        // 更新 phase 跟踪
+        previousSessionPhases = Dictionary(
+            uniqueKeysWithValues: instances.map { ($0.stableId, $0.phase) }
+        )
+
+        guard !newlyCompletedSessions.isEmpty else { return }
+
+        // 任务从活跃→完成：展开任务列表，保持 Flow 岛始终显示
+        presentSessionListOnCompletionIfNeeded()
     }
 
     private func primeCompletionNotificationTracking(_ instances: [SessionState]) {
@@ -1350,6 +1412,23 @@ struct NotchView: View {
         let currentPhases = Dictionary(
             uniqueKeysWithValues: instances.map { ($0.stableId, $0.phase) }
         )
+
+        // Spec: 检测是否有 session 刚从活跃状态进入完成状态（waitingForInput/ended/idle）。
+        // 如果有，直接展开任务列表（完成自动展开现为默认行为，旧设置已移除）。
+        let hasNewCompletion = instances.contains { session in
+            let previousPhase = previousCompletionNotificationPhases[session.stableId]
+            guard let previousPhase = previousPhase else { return false }
+            let wasActive = previousPhase.isActive || previousPhase.isWaitingForApproval
+            let isNowComplete = !session.phase.isActive && !session.phase.isWaitingForApproval
+            return wasActive && isNowComplete
+        }
+
+        if hasNewCompletion {
+            previousCompletionNotificationPhases = currentPhases
+            completionNotificationQueue.removeAll()
+            presentSessionListOnCompletionIfNeeded()
+            return
+        }
 
         // Ambient popups are one-shot notifications. If the notch is already expanded for
         // some other reason, drop new ones instead of queueing them to appear later on
@@ -1395,7 +1474,7 @@ struct NotchView: View {
         SessionCompletionNotificationPolicy.shouldQueueCompletedNotification(
             for: session,
             previousPhase: previousPhase,
-            isEnabled: settings.autoOpenCompletionPanel
+            isEnabled: true
         )
     }
 
@@ -1406,7 +1485,7 @@ struct NotchView: View {
         SessionCompletionNotificationPolicy.shouldQueueEndedNotification(
             for: session,
             previousPhase: previousPhase,
-            isEnabled: settings.autoOpenCompletionPanel
+            isEnabled: true
         )
     }
 
@@ -1461,25 +1540,25 @@ struct NotchView: View {
 
     private func maybePresentNextCompletionNotification() {
         guard !areReminderNotificationsSuppressed else { return }
-        guard activeCompletionNotification == nil else { return }
         guard !completionNotificationQueue.isEmpty else { return }
         guard !viewModel.shouldSuppressAutomaticPresentation else { return }
         guard !hasPendingPermission && !hasHumanIntervention else { return }
-        guard case .instances = viewModel.contentType else { return }
 
-        if viewModel.status == .opened && viewModel.openReason != .notification {
-            return
+        // 任务完成后自动展开任务列表（会话列表），保持 Flow 岛始终显示。
+        // 不再弹出完成通知气泡，直接展示会话列表，由用户手动收起。
+        completionNotificationQueue.removeAll()
+        activeCompletionNotification = nil
+        completionNotificationDismissWorkItem?.cancel()
+        completionNotificationDismissWorkItem = nil
+
+        if viewModel.status != .opened {
+            viewModel.presentSessionList(reason: .notification)
+        } else if case .instances = viewModel.contentType {
+            // 已展开且正在展示会话列表，无需切换
+        } else {
+            viewModel.exitChat()
+            viewModel.openReason = .notification
         }
-
-        let nextNotification = completionNotificationQueue.removeFirst()
-        activeCompletionNotification = nextNotification
-        shouldDismissCompletionNotificationOnHoverExit = false
-
-        if viewModel.status != .opened || viewModel.openReason != .notification {
-            viewModel.notchOpen(reason: .notification)
-        }
-
-        scheduleCompletionNotificationDismissal(for: nextNotification.id)
     }
 
     private func scheduleCompletionNotificationDismissal(for notificationID: UUID) {
@@ -1487,7 +1566,9 @@ struct NotchView: View {
 
         let workItem = DispatchWorkItem { [self] in
             guard activeCompletionNotification?.id == notificationID else { return }
-            dismissActiveCompletionNotification(closePanel: true, advanceQueue: true)
+            // 任务完成后保持 Flow 岛始终展开：通知自动消失时仅清除通知本身，
+            // 不收起面板，由用户手动点击外部收起。
+            dismissActiveCompletionNotification(closePanel: false, advanceQueue: true)
         }
 
         completionNotificationDismissWorkItem = workItem

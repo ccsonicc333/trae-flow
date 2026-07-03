@@ -684,7 +684,6 @@ actor DiagnosticsExporter {
                     "autoHideWhenIdle": AppSettings.autoHideWhenIdle,
                     "autoCollapseOnLeave": AppSettings.autoCollapseOnLeave,
                     "smartSuppression": AppSettings.smartSuppression,
-                    "autoOpenCompletionPanel": AppSettings.autoOpenCompletionPanel,
                     "showAgentDetail": AppSettings.showAgentDetail,
                     "subagentVisibilityMode": AppSettings.subagentVisibilityMode.rawValue,
                     "codexSubagentVisibilityMode": AppSettings.subagentVisibilityMode.rawValue,

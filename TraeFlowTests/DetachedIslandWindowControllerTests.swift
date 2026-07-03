@@ -877,10 +877,6 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
     }
 
     func testCompletedSessionAutoOpensCompletionBubbleInFloatingMode() {
-        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
-        AppSettings.autoOpenCompletionPanel = true
-        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
-
         let viewModel = makeViewModel()
         let sessionMonitor = makeSessionMonitor()
         sessionMonitor.instances = [makeSession(id: "active", phase: .processing)]
@@ -957,36 +953,6 @@ final class DetachedIslandWindowControllerTests: XCTestCase {
         }
 
         wait(for: [bubbleDismissed], timeout: 2.0)
-    }
-
-    func testDisablingCompletionNotificationsPreventsFloatingCompletionBubble() {
-        let originalAutoOpenCompletionPanel = AppSettings.autoOpenCompletionPanel
-        AppSettings.autoOpenCompletionPanel = false
-        defer { AppSettings.autoOpenCompletionPanel = originalAutoOpenCompletionPanel }
-
-        let viewModel = makeViewModel()
-        let sessionMonitor = makeSessionMonitor()
-        sessionMonitor.instances = [makeSession(id: "active", phase: .processing)]
-
-        let controller = DetachedIslandWindowController(
-            viewModel: viewModel,
-            sessionMonitor: sessionMonitor,
-            onClose: {}
-        )
-        defer { controller.dismiss() }
-
-        controller.present(atPetAnchor: CGPoint(x: 1200, y: 220))
-        controller.applySessionSnapshotForTesting([makeCompletedSession(id: "completed")])
-
-        let noBubble = expectation(description: "completion bubble stays hidden")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            XCTAssertNil(controller.currentActiveCompletionNotificationForTesting)
-            XCTAssertEqual(controller.renderedBubbleStateForTesting, .hidden)
-            XCTAssertFalse(controller.isBubbleVisibleForTesting)
-            noBubble.fulfill()
-        }
-
-        wait(for: [noBubble], timeout: 1.0)
     }
 
     func testDismissAttentionBubbleHidesHoverPreview() {

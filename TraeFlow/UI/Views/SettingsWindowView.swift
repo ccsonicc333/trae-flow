@@ -1381,13 +1381,6 @@ private struct SettingsPanelContentView: View {
 
             SettingsSectionCard(title: "行为") {
                 SettingsToggleLine(
-                    title: "完成时自动展开会话",
-                    subtitle: "消息完成后自动弹出结果面板；关闭后只保留刘海状态提示和提示音",
-                    isOn: $settings.autoOpenCompletionPanel
-                )
-                SettingsLineDivider()
-
-                SettingsToggleLine(
                     title: "鼠标移入展开 Flow岛",
                     subtitle: "关闭后需要点击 Flow岛 才会展开",
                     isOn: $settings.openOnHover

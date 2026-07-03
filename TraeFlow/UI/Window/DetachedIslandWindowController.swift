@@ -740,23 +740,6 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
             }
             .store(in: &cancellables)
 
-        AppSettings.shared.$autoOpenCompletionPanel
-            .dropFirst()
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] isEnabled in
-                guard let self else { return }
-                if !isEnabled {
-                    self.removeCompletionNotifications(
-                        matching: { $0 == .completed || $0 == .ended },
-                        keepBubbleOpen: false
-                    )
-                } else {
-                    self.maybePresentNextCompletionNotification()
-                }
-            }
-            .store(in: &cancellables)
-
         AppSettings.shared.$autoOpenCompactedNotificationPanel
             .dropFirst()
             .removeDuplicates()
@@ -1696,7 +1679,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         SessionCompletionNotificationPolicy.shouldQueueCompletedNotification(
             for: session,
             previousPhase: previousPhase,
-            isEnabled: AppSettings.autoOpenCompletionPanel
+            isEnabled: true
         )
     }
 
@@ -1707,7 +1690,7 @@ final class DetachedIslandWindowController: NSWindowController, NSWindowDelegate
         SessionCompletionNotificationPolicy.shouldQueueEndedNotification(
             for: session,
             previousPhase: previousPhase,
-            isEnabled: AppSettings.autoOpenCompletionPanel
+            isEnabled: true
         )
     }
 

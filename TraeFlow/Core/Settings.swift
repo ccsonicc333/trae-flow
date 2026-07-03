@@ -370,7 +370,6 @@ final class AppSettingsStore: ObservableObject {
         static let keepIslandOpen = "keepIslandOpen"
         static let hoverOpenDelayMs = "hoverOpenDelayMs"
         static let smartSuppression = "smartSuppression"
-        static let autoOpenCompletionPanel = "autoOpenCompletionPanel"
         static let autoOpenCompactedNotificationPanel = "autoOpenCompactedNotificationPanel"
         // Spec: 紧凑态/展开态功能选择由 LeftFeatureStore 统一管理（持久化键 leftFeatureCompactID / leftFeatureExpandedActiveID）
         // Spec: 紧凑态左半区高度（默认 24，范围 24–80，步长 1），调高后可承载歌词等富内容
@@ -629,13 +628,6 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(smartSuppression, forKey: Keys.smartSuppression)
-        }
-    }
-
-    @Published var autoOpenCompletionPanel: Bool {
-        didSet {
-            guard !isBootstrapping else { return }
-            defaults.set(autoOpenCompletionPanel, forKey: Keys.autoOpenCompletionPanel)
         }
     }
 
@@ -1502,12 +1494,6 @@ final class AppSettingsStore: ObservableObject {
             exists: persistedKeys.contains(Keys.smartSuppression),
             default: true
         ))
-        _autoOpenCompletionPanel = Published(initialValue: Self.boolValue(
-            from: defaults,
-            key: Keys.autoOpenCompletionPanel,
-            exists: persistedKeys.contains(Keys.autoOpenCompletionPanel),
-            default: true
-        ))
         _autoOpenCompactedNotificationPanel = Published(initialValue: Self.boolValue(
             from: defaults,
             key: Keys.autoOpenCompactedNotificationPanel,
@@ -1773,11 +1759,6 @@ enum AppSettings {
     static var smartSuppression: Bool {
         get { shared.smartSuppression }
         set { shared.smartSuppression = newValue }
-    }
-
-    static var autoOpenCompletionPanel: Bool {
-        get { shared.autoOpenCompletionPanel }
-        set { shared.autoOpenCompletionPanel = newValue }
     }
 
     static var autoOpenCompactedNotificationPanel: Bool {
