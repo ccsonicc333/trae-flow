@@ -24,8 +24,8 @@ class NotchWindowController: NSWindowController {
 
         let screenFrame = screen.frame
 
-        // Window covers full width at top, tall enough for largest content (chat view)
-        let windowHeight: CGFloat = 750
+        // Window covers full width at top, tall enough for largest content (expanded panel up to 1000pt)
+        let windowHeight: CGFloat = 1100
         let windowFrame = NSRect(
             x: screenFrame.origin.x,
             y: screenFrame.maxY - windowHeight,

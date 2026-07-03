@@ -77,10 +77,16 @@ struct NotchView: View {
     /// OnAppear 时通过 spring 动画回 0 实现下滑效果。
     @State private var slideFromTopOffset: CGFloat = -150
     @State private var hasHandledSlideIn = false
+    /// Spec: 左侧展开面板拖拽调整尺寸时记录的起始尺寸，拖拽结束后复位为 nil
+    @State private var leftExpandedResizeStartSize: CGSize?
+    /// Spec: 当前是否悬停在某个调整尺寸手柄上（用于手柄高亮）
+    @State private var resizeHandleHovered: Bool = false
+    /// Spec: 鼠标是否在展开面板的左右下角边缘热区（用于仅此时显示 resize handle）
+    @State private var isMouseInResizeEdgeZone: Bool = false
 
     @Namespace private var activityNamespace
 
-    private let petIconSize: CGFloat = 16
+    private let petIconSize: CGFloat = 22
 
     /// Whether any tracked session is currently processing or compacting
     private var isAnyProcessing: Bool {
@@ -246,6 +252,55 @@ struct NotchView: View {
         case .opened:
             return viewModel.openedSize
         }
+    }
+
+    /// Spec: 仅在 docked 展开态 + customExpanded（左侧功能面板）且有激活功能，
+    /// 且鼠标在面板左右下角边缘热区时才显示拖拽手柄。
+    /// 鼠标在 handle 上、拖拽进行中也保持显示。
+    private var shouldShowLeftExpandedResizeHandles: Bool {
+        viewModel.status == .opened
+            && viewModel.contentType == .customExpanded
+            && viewModel.presentationMode == .docked
+            && leftFeatureStore.expandedActiveFeature != nil
+            && (isMouseInResizeEdgeZone || resizeHandleHovered || viewModel.isLeftExpandedResizeDragActive)
+    }
+
+    /// Spec: 左侧展开面板拖拽手柄的实时回调 —— 根据拖拽位移计算新的尺寸并写入 openedSizeOverride。
+    /// 面板水平居中，故角点水平位移以 2 倍计入宽度变化，使被拖拽的角点跟随光标。
+    private func handleLeftExpandedResizeDrag(translation: CGSize, isLeftCorner: Bool) {
+        if leftExpandedResizeStartSize == nil {
+            leftExpandedResizeStartSize = viewModel.openedSize
+            // 标记拖拽激活，抑制 handleFileDragHover 误切换到中转站
+            viewModel.isLeftExpandedResizeDragActive = true
+        }
+        guard let start = leftExpandedResizeStartSize else { return }
+        let widthDelta = isLeftCorner ? -2 * translation.width : 2 * translation.width
+        let newWidth = start.width + widthDelta
+        let newHeight = start.height + translation.height
+        // Spec: 彻底禁用动画事务，阻断 openedSizeOverride → openedSize → notchSize 链路上的
+        // 所有隐式动画，避免面板追逐光标产生抖动、handle 位置漂移
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            viewModel.openedSizeOverride = CGSize(width: newWidth, height: newHeight)
+        }
+    }
+
+    /// Spec: 拖拽结束 —— 将最终尺寸 clamp 后持久化到当前激活功能的 per-feature 展开尺寸，并清除覆盖
+    private func handleLeftExpandedResizeEnd() {
+        if let override = viewModel.openedSizeOverride {
+            let clamped = viewModel.clampedResizeSize(override)
+            if let feature = leftFeatureStore.expandedActiveFeature {
+                leftFeatureStore.setExpandedSize(
+                    id: feature.id,
+                    width: Double(clamped.width),
+                    height: Double(clamped.height)
+                )
+            }
+        }
+        viewModel.openedSizeOverride = nil
+        viewModel.isLeftExpandedResizeDragActive = false
+        leftExpandedResizeStartSize = nil
     }
 
     /// Width of the closed content (notch + any expansion)
@@ -547,7 +602,8 @@ struct NotchView: View {
                 alignment: .top
             )
             .animation(isOpened ? openAnimation : closeAnimation, value: viewModel.status)
-            .animation(viewModel.closedNotchResizeAnimation, value: notchSize)
+            // Spec: resize handle 拖拽期间禁用尺寸动画，避免面板追逐光标产生抖动
+            .animation(viewModel.isLeftExpandedResizeDragActive ? nil : viewModel.closedNotchResizeAnimation, value: notchSize)
             .animation(.smooth, value: activityCoordinator.expandingActivity)
             .animation(.smooth, value: hasPendingPermission)
             .animation(.smooth, value: hasHumanIntervention)
@@ -557,6 +613,64 @@ struct NotchView: View {
             .onHover { hovering in
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
                     isHovering = hovering
+                }
+                // Spec: 鼠标离开整个面板时清除边缘热区标志
+                if !hovering {
+                    isMouseInResizeEdgeZone = false
+                    resizeHandleHovered = false
+                }
+            }
+            // Spec: 通过 onContinuousHover 追踪面板内鼠标位置，进入底部边缘热区时显示 resize handle。
+            // 用 continuous hover + 坐标判断替代独立 overlay 的 onHover，避免 handle 显隐与
+            // overlay hover 互相触发导致闪烁。
+            .onContinuousHover { phase in
+                guard viewModel.contentType == .customExpanded,
+                      viewModel.presentationMode == .docked,
+                      viewModel.status == .opened else {
+                    if isMouseInResizeEdgeZone { isMouseInResizeEdgeZone = false }
+                    return
+                }
+                switch phase {
+                case .active(let location):
+                    // location 是相对此视图的本地坐标；底部 28pt 且左右各 70pt 内算边缘热区
+                    let panelHeight = notchSize.height
+                    let panelWidth = notchSize.width
+                    let inBottomEdge = location.y >= panelHeight - 28
+                    let inLeftEdge = location.x <= 70
+                    let inRightEdge = location.x >= panelWidth - 70
+                    let inEdgeZone = inBottomEdge && (inLeftEdge || inRightEdge)
+                    if inEdgeZone != isMouseInResizeEdgeZone {
+                        isMouseInResizeEdgeZone = inEdgeZone
+                    }
+                case .ended:
+                    if isMouseInResizeEdgeZone { isMouseInResizeEdgeZone = false }
+                }
+            }
+            // Spec: 左侧展开面板左右下角可拖拽调整尺寸的手柄（仅 customExpanded + docked 展开态 + 边缘热区）
+            .overlay(alignment: .bottomLeading) {
+                if shouldShowLeftExpandedResizeHandles {
+                    LeftExpandedResizeHandle(
+                        corner: .bottomLeft,
+                        isHovering: resizeHandleHovered,
+                        onHoverChange: { resizeHandleHovered = $0 },
+                        onDrag: { handleLeftExpandedResizeDrag(translation: $0, isLeftCorner: true) },
+                        onEnd: handleLeftExpandedResizeEnd
+                    )
+                    .padding(.leading, 8)
+                    .padding(.bottom, 6)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if shouldShowLeftExpandedResizeHandles {
+                    LeftExpandedResizeHandle(
+                        corner: .bottomRight,
+                        isHovering: resizeHandleHovered,
+                        onHoverChange: { resizeHandleHovered = $0 },
+                        onDrag: { handleLeftExpandedResizeDrag(translation: $0, isLeftCorner: false) },
+                        onEnd: handleLeftExpandedResizeEnd
+                    )
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 6)
                 }
             }
     }
@@ -1878,5 +1992,97 @@ private struct SessionCountIndicator: View {
         )
         .frame(minWidth: 18)
         .offset(x: closedNotchRightShift)
+    }
+}
+
+/// Spec: 左侧展开面板左右下角的可拖拽调整尺寸手柄。
+/// 拖拽位移通过 `onDrag` 回调上抛，由 NotchView 计算 new size 并写入 `viewModel.openedSizeOverride`；
+/// 拖拽结束 `onEnd` 触发持久化到当前激活功能的 `expandedWidth` / `expandedHeight`。
+private struct LeftExpandedResizeHandle: View {
+    enum Corner {
+        case bottomLeft
+        case bottomRight
+    }
+
+    let corner: Corner
+    let isHovering: Bool
+    let onHoverChange: (Bool) -> Void
+    let onDrag: (CGSize) -> Void
+    let onEnd: () -> Void
+
+    private var isLeftCorner: Bool { corner == .bottomLeft }
+
+    /// Spec: 缓存自定义斜向 resize 光标，避免每次 onHover 重新渲染图像。
+    /// 右下角↖↘，左下角为水平镜像↗↙，与 handle 图标方向一致。
+    private static let rightDiagonalCursor: NSCursor? = makeDiagonalCursor(mirrored: false)
+    private static let leftDiagonalCursor: NSCursor? = makeDiagonalCursor(mirrored: true)
+
+    private static func makeDiagonalCursor(mirrored: Bool) -> NSCursor? {
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .bold)
+        guard let baseImage = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: mirrored ? "↗↙ resize" : "↖↘ resize"),
+              let symbolImage = baseImage.withSymbolConfiguration(config) else {
+            return nil
+        }
+        let canvasSize = NSSize(width: 24, height: 24)
+        let finalImage = NSImage(size: canvasSize)
+        finalImage.lockFocus()
+        let drawRect = NSRect(x: (canvasSize.width - symbolImage.size.width) / 2,
+                              y: (canvasSize.height - symbolImage.size.height) / 2,
+                              width: symbolImage.size.width,
+                              height: symbolImage.size.height)
+        if mirrored {
+            // Spec: 通过 CTM 水平镜像绘制，使左下角光标为右下角的镜像
+            let transform = NSAffineTransform()
+            transform.translateX(by: canvasSize.width / 2, yBy: canvasSize.height / 2)
+            transform.scaleX(by: -1, yBy: 1)
+            transform.translateX(by: -canvasSize.width / 2, yBy: -canvasSize.height / 2)
+            transform.concat()
+        }
+        symbolImage.draw(in: drawRect)
+        finalImage.unlockFocus()
+        // hotSpot 置于图像中心
+        return NSCursor(image: finalImage, hotSpot: NSPoint(x: canvasSize.width / 2, y: canvasSize.height / 2))
+    }
+
+    static func diagonalResizeCursor(isLeftCorner: Bool) -> NSCursor {
+        if isLeftCorner, let cursor = leftDiagonalCursor { return cursor }
+        if !isLeftCorner, let cursor = rightDiagonalCursor { return cursor }
+        // 兜底：系统水平 resize 光标
+        return NSCursor.resizeLeftRight
+    }
+
+    var body: some View {
+        ZStack {
+            // 圆角底色衬底，悬停时提亮，提示可拖拽
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.white.opacity(isHovering ? 0.22 : 0.10))
+            // 斜向双向箭头：右下角↖↘；左下角为其水平镜像（.scaleEffect(x: -1)）
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Color.white.opacity(isHovering ? 0.85 : 0.45))
+                .scaleEffect(x: isLeftCorner ? -1 : 1, y: 1)
+        }
+        .frame(width: 18, height: 18)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            onHoverChange(hovering)
+            if hovering {
+                // Spec: 自定义斜向光标，与图标方向一致
+                LeftExpandedResizeHandle.diagonalResizeCursor(isLeftCorner: isLeftCorner).push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            // Spec: 用 .global 坐标空间，避免 handle 随面板缩放移动时 local 坐标系漂移
+            // 导致 translation 反馈式抖动
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { value in
+                    onDrag(value.translation)
+                }
+                .onEnded { _ in
+                    onEnd()
+                }
+        )
     }
 }

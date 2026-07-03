@@ -47,7 +47,14 @@ class NotchViewModel: ObservableObject {
     @Published private(set) var presentationMode: IslandPresentationMode = .docked
     @Published private(set) var detachedDisplayMode: DetachedIslandDisplayMode = .compact
     @Published var openReason: NotchOpenReason = .unknown
-    @Published var contentType: NotchContentType = .instances
+    @Published var contentType: NotchContentType = .instances {
+        didSet {
+            // Spec: 离开 customExpanded 时清除拖拽中的尺寸覆盖，避免残留到其他内容类型
+            if contentType != .customExpanded {
+                openedSizeOverride = nil
+            }
+        }
+    }
     @Published var isHovering: Bool = false
     @Published private(set) var openedMeasuredHeight: CGFloat?
     /// 分离态专用内容类型，与 docked 的 contentType 完全解耦，
@@ -64,6 +71,23 @@ class NotchViewModel: ObservableObject {
     @Published private(set) var isInlineTextInputActive = false
     /// 屏幕切换后触发滑块从顶部向下动画的标志，由 IslandPresentationCoordinator 设置，NotchView 消费后复位
     @Published var triggerScreenSlideIn = false
+
+    /// Spec: 左侧展开面板（customExpanded）拖拽调整尺寸时的实时覆盖值。
+    /// 非 nil 且当前为 docked customExpanded 时，`panelSize(for:)` 直接返回该值（经 clamp）。
+    /// 拖拽结束写入 LeftFeatureStore 后清空，下次展开读取持久化尺寸。
+    /// 切换激活功能 / 离开 customExpanded / 关闭面板时自动清空。
+    @Published var openedSizeOverride: CGSize?
+
+    /// Spec: 左侧展开面板 resize handle 正在被拖拽时为 true。
+    /// 用于抑制 `handleFileDragHover` 在普通鼠标拖拽（非文件拖拽）期间误触发切换到中转站。
+    /// 由 NotchView 在 DragGesture 开始/结束时维护。
+    var isLeftExpandedResizeDragActive: Bool = false
+
+    /// Spec: 记录当前拖拽的 mouseDown 是否落在展开面板内部。
+    /// 文件拖拽（从 Finder）的 mouseDown 在面板外部，不会置此标志；
+    /// resize handle 拖拽的 mouseDown 在面板内部，置 true。
+    /// 在 `handleFileDragHover` 中作为附加 guard，避免 dragPboard 残留文件 URL 时误切换到中转站。
+    private var dragStartedInsideOpenedPanel: Bool = false
 
     // MARK: - Geometry
 
@@ -182,6 +206,12 @@ class NotchViewModel: ObservableObject {
 
         // docked 与 detached 使用各自的内容类型与测量高度，互不腐蚀
         let resolvedContentType: NotchContentType = style == .detached ? detachedContentType : contentType
+
+        // Spec: 左侧展开面板拖拽调整尺寸时的实时覆盖（仅 docked customExpanded 生效）
+        if style == .docked, resolvedContentType == .customExpanded, let override = openedSizeOverride {
+            return clampedResizeSize(override)
+        }
+
         let resolvedOpenReason: NotchOpenReason = style == .detached ? .click : openReason
         let resolvedMeasuredHeight: CGFloat? = style == .detached ? detachedOpenedMeasuredHeight : openedMeasuredHeight
 
@@ -266,6 +296,21 @@ class NotchViewModel: ObservableObject {
             // 任务列表高度仅受屏幕限制，不受面板最大高度设置约束
             return screenLimit
         }
+    }
+
+    /// Spec: 拖拽调整左侧展开面板尺寸时的边界 clamp，与全局 Settings 的展开尺寸范围保持一致
+    /// （width 470–1600，height 200–1000），并叠加屏幕可用尺寸上限。
+    func clampedResizeSize(_ size: CGSize) -> CGSize {
+        let minWidth: CGFloat = 470
+        let maxWidth: CGFloat = min(screenRect.width - 64, 1600)
+        let effectiveMinWidth = min(minWidth, maxWidth)
+        let minHeight: CGFloat = 200
+        let maxHeight: CGFloat = min(screenRect.height - 120, 1000)
+        let effectiveMinHeight = min(minHeight, maxHeight)
+        return CGSize(
+            width: min(max(size.width, effectiveMinWidth), maxWidth),
+            height: min(max(size.height, effectiveMinHeight), maxHeight)
+        )
     }
 
     /// 当前面板固定状态：若当前激活功能设置了 `expandedPinned` 则视为已固定，否则跟随全局 `keepIslandOpen`。
@@ -463,6 +508,14 @@ class NotchViewModel: ObservableObject {
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
+
+        // Spec: 切换激活功能时清除拖拽中的尺寸覆盖，避免覆盖值作用于新功能
+        LeftFeatureStore.shared.$expandedActiveFeatureID
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.openedSizeOverride = nil
+            }
+            .store(in: &cancellables)
     }
 
     func refreshFullscreenPresentationState() {
@@ -652,8 +705,14 @@ class NotchViewModel: ObservableObject {
             if geometry.isPointOutsidePanel(location, size: openedSize) {
                 // The panel window already handles click-through replay for intercepted clicks.
                 notchClose()
+                dragStartedInsideOpenedPanel = false
+            } else {
+                // Spec: mouseDown 落在展开面板内部（含 resize handle），标记以抑制
+                // handleFileDragHover 在此拖拽期间误切换到中转站
+                dragStartedInsideOpenedPanel = true
             }
         case .closed, .popping:
+            dragStartedInsideOpenedPanel = false
             if detachmentTriggerScreenRect.contains(location) {
                 beginDockedDetachmentTracking(source: .closed, startLocation: location)
             } else if isPointInHoverTrigger(location) {
@@ -719,6 +778,11 @@ class NotchViewModel: ObservableObject {
     /// 需用户前往设置手动打开后才会再次响应文件拖拽。
     private func handleFileDragHover(at location: CGPoint) {
         guard hasFileURLsOnDragPasteboard else { return }
+        // Spec: resize handle 拖拽期间全局 mouseDragged 仍会触发此回调；
+        // dragPboard 可能残留之前文件拖拽的 URL，导致误切换到中转站。
+        // 双重 guard：DragGesture 标志 + mouseDown 起点标志，覆盖 SwiftUI 手势与
+        // 全局事件监视器之间的时序差。
+        guard !isLeftExpandedResizeDragActive, !dragStartedInsideOpenedPanel else { return }
 
         let overClosedNotch = (status == .closed || status == .popping) && isPointInHoverTrigger(location)
         let overOpenedPanel = status == .opened && geometry.isPointInOpenedPanel(location, size: openedSize)
@@ -746,6 +810,8 @@ class NotchViewModel: ObservableObject {
     }
 
     private func handleMouseUp(_ event: NSEvent) {
+        // Spec: mouseUp 时清除拖拽起点标志，避免影响后续文件拖拽
+        dragStartedInsideOpenedPanel = false
         guard presentationMode == .docked || detachmentTracking?.hasTriggeredDetachment == true else { return }
         guard let tracking = detachmentTracking else { return }
 
@@ -948,6 +1014,7 @@ class NotchViewModel: ObservableObject {
         contentType = .instances
         openedMeasuredHeight = nil
         isInlineTextInputActive = false
+        openedSizeOverride = nil
     }
 
     func beginDetachedPresentation(contentType: NotchContentType, playSound: Bool = true) {

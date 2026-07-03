@@ -114,7 +114,7 @@ struct MusicExpandedView: View {
         }
     }
 
-    /// 可点击的进度条：点击/轻触位置即跳转到对应比例时间。
+    /// 进度条：仅展示当前播放进度，不可点击/拖拽。
     @ViewBuilder
     private func clickableProgressBar(_ np: NowPlayingInfo) -> some View {
         GeometryReader { geo in
@@ -124,11 +124,6 @@ struct MusicExpandedView: View {
                 Capsule()
                     .fill(Color.white)
                     .frame(width: np.duration > 0 ? geo.size.width * CGFloat(np.elapsed / np.duration) : 0)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { location in
-                let ratio = max(0, min(1, location.x / geo.size.width))
-                provider.seek(to: ratio * np.duration)
             }
         }
         .frame(height: 4)

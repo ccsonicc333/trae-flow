@@ -208,13 +208,13 @@ struct EditableCustomAreaView: View {
                         Text("展开宽度：\(Int(expandedWidth)) pt")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Slider(value: $expandedWidth, in: 470...800, step: 10)
+                        Slider(value: $expandedWidth, in: 470...1600, step: 10)
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("展开高度：\(Int(expandedHeight)) pt")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Slider(value: $expandedHeight, in: 200...900, step: 10)
+                        Slider(value: $expandedHeight, in: 200...1000, step: 10)
                     }
                 }
             }
