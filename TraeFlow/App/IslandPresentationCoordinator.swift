@@ -3,7 +3,10 @@ import Combine
 
 @MainActor
 final class IslandPresentationCoordinator {
-    private static let dockedWindowHeight: CGFloat = 750
+    // Spec: 必须与 NotchWindowController 的 windowHeight 保持一致，
+    // 否则 NotchViewController.hitTestRect 的 y 坐标计算会与实际窗口原点错位，
+    // 导致 header 按钮无法点击。
+    private static let dockedWindowHeight: CGFloat = 1100
 
     let sessionMonitor = SessionMonitor()
     let viewModel: NotchViewModel
