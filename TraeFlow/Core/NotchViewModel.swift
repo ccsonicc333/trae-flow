@@ -715,6 +715,8 @@ class NotchViewModel: ObservableObject {
     // MARK: - File Drag Auto-Open Shelf
 
     /// 当检测到文件拖拽经过闭合 notch 或已展开面板时，自动展开并切换到中转站功能。
+    /// 注意：中转站被用户在设置里手动关闭后，不会自动启用、也不会自动展开，
+    /// 需用户前往设置手动打开后才会再次响应文件拖拽。
     private func handleFileDragHover(at location: CGPoint) {
         guard hasFileURLsOnDragPasteboard else { return }
 
@@ -722,24 +724,18 @@ class NotchViewModel: ObservableObject {
         let overOpenedPanel = status == .opened && geometry.isPointInOpenedPanel(location, size: openedSize)
         guard overClosedNotch || overOpenedPanel else { return }
 
-        activateShelfFeatureIfNeeded()
-
-        if status != .opened {
-            presentCustomExpanded(reason: .click)
-        }
-    }
-
-    private func activateShelfFeatureIfNeeded() {
+        // 中转站被手动关闭后不自动启用；找不到或未启用则跳过整个拖拽响应流程
         guard let shelf = LeftFeatureStore.shared.features.first(where: {
             if case .shelf = $0.kind { return true }
             return false
-        }) else { return }
+        }), shelf.isEnabled else { return }
 
-        if !shelf.isEnabled {
-            LeftFeatureStore.shared.setFeatureEnabled(id: shelf.id, isEnabled: true)
-        }
         if LeftFeatureStore.shared.expandedActiveFeature?.id != shelf.id {
             LeftFeatureStore.shared.setExpandedActiveFeature(id: shelf.id)
+        }
+
+        if status != .opened {
+            presentCustomExpanded(reason: .click)
         }
     }
 
