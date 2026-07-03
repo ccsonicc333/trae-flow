@@ -174,13 +174,12 @@ jobs:
             cp "$AUTHORED_NOTES" "$NOTES_FILE"
             printf '\n\n%s\n' "$RELEASE_BLOCK" >> "$NOTES_FILE"
           else
-            # Fallback: auto-generate from commits since last tag (zh + en)
+            # Fallback: auto-generate from commits since last tag (zh only)
             LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
 
             {
               echo "## TRAE FLOW $VERSION (Build $BUILD)"
               echo ""
-              echo "<!-- zh-Hans -->"
               if [ -n "$LAST_TAG" ]; then
                 echo "### 变更记录"
                 echo ""
@@ -193,33 +192,12 @@ jobs:
                 echo "- TRAE FLOW $VERSION 发布"
               fi
               echo ""
-              echo "<!-- en -->"
-              echo "## TRAE FLOW $VERSION (Build $BUILD)"
-              echo ""
-              if [ -n "$LAST_TAG" ]; then
-                echo "### Changes"
-                echo ""
-                git log --oneline --no-merges "$LAST_TAG..HEAD" | while read -r line; do
-                  echo "- $line"
-                done
-              else
-                echo "### First Release"
-                echo ""
-                echo "- TRAE FLOW $VERSION release"
-              fi
-              echo ""
               echo "---"
               echo ""
-              echo "Included assets:"
-              echo "- $(basename "${{ steps.dmg.outputs.dmg_path }}") (recommended for manual install)"
+              echo "包含资产："
+              echo "- $(basename "${{ steps.dmg.outputs.dmg_path }}")（推荐手动安装）"
               echo ""
               echo "**注意：此版本未经过 Apple 公证**，首次打开请右键 → 打开，或运行："
-              echo ""
-              echo '```bash'
-              echo "xattr -d com.apple.quarantine /Applications/TRAE\\ FLOW.app"
-              echo '```'
-              echo ""
-              echo "**Note: This build is not notarized by Apple.** Right-click the app and select Open on first launch, or run:"
               echo ""
               echo '```bash'
               echo "xattr -d com.apple.quarantine /Applications/TRAE\\ FLOW.app"
