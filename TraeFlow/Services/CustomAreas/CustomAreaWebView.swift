@@ -20,6 +20,9 @@ struct CustomAreaWebView: NSViewRepresentable {
         case localArea(CustomArea)
         /// 远程 URL
         case remoteURL(URL)
+        /// Mineradio 网页（注入 Bridge 兼容层 + JSC 引擎）
+        /// Spec: mineradio-bridge-compat-layer
+        case mineradio(URL)
 
         /// 关联的区域（仅 .localArea 有值）
         var area: CustomArea? {
@@ -29,24 +32,61 @@ struct CustomAreaWebView: NSViewRepresentable {
 
         /// 是否允许外部网络访问
         /// - `.localArea` 跟随 `CustomArea.allowsNetworkAccess`
-        /// - `.remoteURL` 恒为 true（远程站点本身即需网络）
+        /// - `.remoteURL` / `.mineradio` 恒为 true（远程站点本身即需网络）
         var allowsNetworkAccess: Bool {
             switch self {
             case .localArea(let area): return area.allowsNetworkAccess
             case .remoteURL: return true
+            case .mineradio: return true
             }
         }
 
-        /// 用于 JS Bridge 的 areaID（远程 URL 无 areaID 时返回 nil，hint 不生效）
+        /// 用于 JS Bridge 的 areaID（远程 URL / mineradio 无 areaID，hint 不生效）
         var areaID: String? {
             if case .localArea(let area) = self { return area.id }
             return nil
         }
+
+        /// 是否为 Mineradio 源（需注入 Bridge user script + 注册 message handler）
+        var isMineradio: Bool {
+            if case .mineradio = self { return true }
+            return false
+        }
     }
 
     let source: ContentSource
+    /// Spec: 远程 URL 功能收起后保活开关 —— 仅展开态传 true 时启用缓存复用。
+    /// 开启后 SwiftUI 移除宿主视图时 WKWebView 由 `CustomAreaWebViewCache` 持有强引用继续存活；
+    /// 下次 `makeNSView` 从缓存取回同一实例并重新绑定 Coordinator（message handler / delegate）。
+    let keepsAlive: Bool
+
+    init(source: ContentSource, keepsAlive: Bool = false) {
+        self.source = source
+        self.keepsAlive = keepsAlive
+    }
+
+    /// Spec: 缓存复用 —— `.remoteURL` / `.mineradio` 源 + `keepsAlive == true` 时查缓存。
+    /// 命中缓存时复用 WKWebView（重新绑定 Coordinator），否则新建并存入缓存。
+    /// `.localArea` 源不经过缓存（本地文件资源开销低，无需保活）。
+    private func cachedURL() -> URL? {
+        guard keepsAlive else { return nil }
+        switch source {
+        case .remoteURL(let url): return url
+        case .mineradio(let url): return url
+        case .localArea: return nil
+        }
+    }
 
     func makeNSView(context: Context) -> WKWebView {
+        // Spec: 保活缓存命中 —— 复用已存在的 WKWebView，重新绑定 Coordinator 后返回
+        if let cachedURL = cachedURL(),
+           let cached = CustomAreaWebViewCache.shared.webView(for: cachedURL) {
+            rebindCoordinator(to: cached, context: context)
+            cached.removeFromSuperview()
+            loadAreaIfNeeded(into: cached, context: context)
+            return cached
+        }
+
         let configuration = WKWebViewConfiguration()
         configuration.preferences = WKPreferences()
 
@@ -55,6 +95,16 @@ struct CustomAreaWebView: NSViewRepresentable {
         preferences.javaScriptCanOpenWindowsAutomatically = false
         if #available(macOS 13.0, *) {
             preferences.isElementFullscreenEnabled = false
+        }
+
+        // Spec: mineradio-bridge-compat-layer —— Mineradio 源特殊配置
+        if source.isMineradio {
+            // 使用 default dataStore 共享 cookie（登录 WebView 与 mineradio WebView 共用）
+            configuration.websiteDataStore = WKWebsiteDataStore.default()
+            // 桌面 Chrome UA（避免 mineradio.art 检测为移动端）
+            configuration.applicationNameForUserAgent = "Chrome/124.0.0.0"
+            // 允许自动播放媒体（mineradio 是音乐播放器）
+            configuration.mediaTypesRequiringUserActionForPlayback = []
         }
 
         // Spec: 仅在不允许外部网络时注册本地 scheme handler（限制外部资源）
@@ -67,12 +117,25 @@ struct CustomAreaWebView: NSViewRepresentable {
         // Spec: 注册 JS Bridge —— 系统指标查询通道（HTML 可通过此通道获取真实 CPU/内存/负载数据）
         configuration.userContentController.add(context.coordinator, name: Self.metricsMessageHandlerName)
 
+        // Spec: mineradio-bridge-compat-layer —— 注入 Bridge user script + 注册 message handler
+        if source.isMineradio {
+            let bridgeScript = MineradioBridgeUserScript.makeUserScript()
+            configuration.userContentController.addUserScript(bridgeScript)
+            configuration.userContentController.add(context.coordinator, name: MineradioBridgeUserScript.apiMessageHandlerName)
+            configuration.userContentController.add(context.coordinator, name: MineradioBridgeUserScript.binaryMessageHandlerName)
+        }
+
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.setValue(false, forKey: "drawsBackground") // 透明背景
         webView.underPageBackgroundColor = .clear
+
+        // Spec: mineradio 桌面 Chrome UA
+        if source.isMineradio {
+            webView.customUserAgent = MineradioBridgeUserScript.desktopChromeUserAgent
+        }
 
         // Spec: 禁用内置缩放、强制可访问性
         if #available(macOS 13.0, *) {
@@ -83,14 +146,101 @@ struct CustomAreaWebView: NSViewRepresentable {
         // 同步当前 areaID 与网络访问策略（区域/源切换时 JS Bridge 与导航策略需引用最新值）
         context.coordinator.currentAreaID = source.areaID
         context.coordinator.allowsNetworkAccess = source.allowsNetworkAccess
-        // 同步源类型：`.remoteURL` 设 true，`.localArea` 设 false —— decidePolicyFor 据此区分同 host 跳转策略
+        // 同步源类型 —— decidePolicyFor 据此区分跳转策略：
+        // - `.remoteURL`：同 host 在 WebView 内导航，不同 host 转系统浏览器
+        // - `.mineradio`：所有 http/https 主框架导航在 WebView 内（允许跨 host）
+        // - `.localArea`：所有 http/https 主框架导航转系统浏览器
         if case .remoteURL = source {
             context.coordinator.isRemoteSource = true
+            context.coordinator.isMineradioSource = false
+        } else if source.isMineradio {
+            context.coordinator.isRemoteSource = false
+            context.coordinator.isMineradioSource = true
         } else {
             context.coordinator.isRemoteSource = false
+            context.coordinator.isMineradioSource = false
         }
+
+        // Spec: mineradio-bridge-compat-layer —— 绑定 Coordinator
+        if source.isMineradio {
+            MineradioBridgeCoordinator.shared.attach(to: webView)
+        }
+
+        // Spec: 保活缓存存入 —— `.remoteURL` / `.mineradio` 源 + `keepsAlive == true` 时存
+        if let cachedURL = cachedURL() {
+            CustomAreaWebViewCache.shared.storeWebView(webView, for: cachedURL)
+        }
+
         loadArea(into: webView, context: context)
         return webView
+    }
+
+    /// Spec: 保活复用时重新绑定 Coordinator —— 旧 message handler 指向已释放的旧 Coordinator，
+    /// 需先移除再添加新的；navigationDelegate / uiDelegate 也更新为新 Coordinator。
+    /// Mineradio 源额外重新绑定 Bridge message handler 并重新 attach `MineradioBridgeCoordinator`。
+    private func rebindCoordinator(to webView: WKWebView, context: Context) {
+        let controller = webView.configuration.userContentController
+        // 移除旧 handler（释放旧 Coordinator）
+        controller.removeScriptMessageHandler(forName: Self.hintMessageHandlerName)
+        controller.removeScriptMessageHandler(forName: Self.metricsMessageHandlerName)
+        if source.isMineradio {
+            controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.apiMessageHandlerName)
+            controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.binaryMessageHandlerName)
+        }
+        // 添加新 handler
+        controller.add(context.coordinator, name: Self.hintMessageHandlerName)
+        controller.add(context.coordinator, name: Self.metricsMessageHandlerName)
+        if source.isMineradio {
+            controller.add(context.coordinator, name: MineradioBridgeUserScript.apiMessageHandlerName)
+            controller.add(context.coordinator, name: MineradioBridgeUserScript.binaryMessageHandlerName)
+        }
+        // 更新 delegate
+        webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
+        // 同步 Coordinator 状态
+        context.coordinator.webView = webView
+        context.coordinator.currentAreaID = source.areaID
+        context.coordinator.allowsNetworkAccess = source.allowsNetworkAccess
+        if case .remoteURL = source {
+            context.coordinator.isRemoteSource = true
+            context.coordinator.isMineradioSource = false
+        } else if source.isMineradio {
+            context.coordinator.isRemoteSource = false
+            context.coordinator.isMineradioSource = true
+            // Spec: mineradio-bridge-compat-layer —— 重新 attach Coordinator
+            //（attach 只更新 webView 引用 + 刷新登录态，不重置页面状态）
+            MineradioBridgeCoordinator.shared.attach(to: webView)
+        } else {
+            context.coordinator.isRemoteSource = false
+            context.coordinator.isMineradioSource = false
+        }
+    }
+
+    /// Spec: 保活复用时仅在 URL 变化或未加载时重新 load，避免重置页面状态（音频/滚动/会话）。
+    /// 新 Coordinator 无 `lastRemoteURLString` 状态，直接比对 WebView 当前 URL。
+    private func loadAreaIfNeeded(into webView: WKWebView, context: Context) {
+        switch source {
+        case .localArea:
+            // 本地源不经过保活缓存（cachedRemoteURL 只返回 .remoteURL），此分支不会命中
+            loadArea(into: webView, context: context)
+        case .remoteURL(let url):
+            if webView.url?.absoluteString != url.absoluteString {
+                loadArea(into: webView, context: context)
+            } else {
+                // URL 一致：同步 Coordinator 状态，避免 updateNSView 误判需要 reload
+                context.coordinator.lastRemoteURLString = url.absoluteString
+                context.coordinator.lastAreaID = nil
+                context.coordinator.lastEntryPointURL = nil
+            }
+        case .mineradio(let url):
+            if webView.url?.absoluteString != url.absoluteString {
+                loadArea(into: webView, context: context)
+            } else {
+                context.coordinator.lastRemoteURLString = url.absoluteString
+                context.coordinator.lastAreaID = nil
+                context.coordinator.lastEntryPointURL = nil
+            }
+        }
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
@@ -98,11 +248,16 @@ struct CustomAreaWebView: NSViewRepresentable {
         // 同步当前 areaID 与网络访问策略（区域/源切换时 JS Bridge 与导航策略需引用最新值）
         context.coordinator.currentAreaID = source.areaID
         context.coordinator.allowsNetworkAccess = source.allowsNetworkAccess
-        // 同步源类型：`.remoteURL` 设 true，`.localArea` 设 false —— decidePolicyFor 据此区分同 host 跳转策略
+        // 同步源类型 —— decidePolicyFor 据此区分跳转策略
         if case .remoteURL = source {
             context.coordinator.isRemoteSource = true
+            context.coordinator.isMineradioSource = false
+        } else if source.isMineradio {
+            context.coordinator.isRemoteSource = false
+            context.coordinator.isMineradioSource = true
         } else {
             context.coordinator.isRemoteSource = false
+            context.coordinator.isMineradioSource = false
         }
 
         // 仅当源标识或入口 URL 变化时重新加载
@@ -121,12 +276,19 @@ struct CustomAreaWebView: NSViewRepresentable {
             if needsReload {
                 loadArea(into: webView, context: context)
             }
+        case .mineradio(let url):
+            let urlString = url.absoluteString
+            let needsReload = context.coordinator.lastRemoteURLString != urlString
+                || context.coordinator.lastAreaID != nil
+            if needsReload {
+                loadArea(into: webView, context: context)
+            }
         }
     }
 
     /// Spec: 按内容源选择加载方式
     /// - `.localArea` → `loadFileURL(_:allowingReadAccessTo:)` 加载目录入口 HTML
-    /// - `.remoteURL` → `load(URLRequest(url:))` 加载远程站点
+    /// - `.remoteURL` / `.mineradio` → `load(URLRequest(url:))` 加载远程站点
     private func loadArea(into webView: WKWebView, context: Context) {
         switch source {
         case .localArea(let area):
@@ -136,6 +298,11 @@ struct CustomAreaWebView: NSViewRepresentable {
             context.coordinator.lastEntryPointURL = area.entryPointURL
             context.coordinator.lastRemoteURLString = nil
         case .remoteURL(let url):
+            webView.load(URLRequest(url: url))
+            context.coordinator.lastAreaID = nil
+            context.coordinator.lastEntryPointURL = nil
+            context.coordinator.lastRemoteURLString = url.absoluteString
+        case .mineradio(let url):
             webView.load(URLRequest(url: url))
             context.coordinator.lastAreaID = nil
             context.coordinator.lastEntryPointURL = nil
@@ -165,6 +332,10 @@ struct CustomAreaWebView: NSViewRepresentable {
         /// `.remoteURL` 源同 host 链接在 WebView 内导航、不同 host 转系统浏览器；
         /// `.localArea` 源所有 http/https 主框架导航一律转系统浏览器。在 makeNSView / updateNSView 中同步。
         var isRemoteSource: Bool = false
+        /// 当前内容源是否为 Mineradio —— `decidePolicyFor` 据此放行跨 host 主框架导航
+        ///（mineradio.art 可能跳转 OAuth 回调或其他 host）。
+        /// Spec: mineradio-bridge-compat-layer
+        var isMineradioSource: Bool = false
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             // 源标识在 loadArea 中同步，无需在此推导
@@ -178,8 +349,10 @@ struct CustomAreaWebView: NSViewRepresentable {
         /// - 主框架 http/https 导航到不同 host 的外部链接转交系统默认浏览器打开（避免在 WebView 内跳走）；
         /// - `.remoteURL` 源同 host 的主框架导航在 WebView 内继续；
         /// - `.localArea` 源所有 http/https 主框架导航一律转系统浏览器（本地 HTML 不会与外部站点同源）；
+        /// - `.mineradio` 源所有 http/https 主框架导航在 WebView 内（允许跨 host，OAuth 回调可能跳转其他 host）；
         /// - 子框架/资源请求（图片/JS/css/fetch 等）按 `allowsNetworkAccess` 决定；
         /// - `file` / `trae-flow-local` 始终放行；其他 scheme 一律取消。
+        /// Spec: mineradio-bridge-compat-layer
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
@@ -204,8 +377,10 @@ struct CustomAreaWebView: NSViewRepresentable {
             // http / https 处理
             if scheme == "http" || scheme == "https" {
                 if isMainFrameNavigation {
-                    // 主框架导航 —— 外部链接转系统默认浏览器，避免在 WebView 内跳走
-                    if isRemoteSource {
+                    if isMineradioSource {
+                        // mineradio 源：跨 host 主框架导航一律放行（OAuth 回调 / 第三方登录可能跳转其他 host）
+                        decisionHandler(.allow)
+                    } else if isRemoteSource {
                         // 远程 URL 源：同 host 在 WebView 内导航，不同 host 转系统浏览器
                         if isSameHost(currentURL, url) {
                             decisionHandler(.allow)
@@ -264,6 +439,16 @@ struct CustomAreaWebView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            // Spec: mineradio-bridge-compat-layer —— Bridge API / 二进制消息路由到 MineradioBridgeCoordinator
+            if message.name == MineradioBridgeUserScript.apiMessageHandlerName {
+                MineradioBridgeCoordinator.shared.handleApiMessage(message)
+                return
+            }
+            if message.name == MineradioBridgeUserScript.binaryMessageHandlerName {
+                MineradioBridgeCoordinator.shared.handleBinaryMessage(message)
+                return
+            }
+
             // 系统指标查询
             if message.name == CustomAreaWebView.metricsMessageHandlerName {
                 handleMetricsRequest()

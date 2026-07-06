@@ -376,6 +376,8 @@ final class AppSettingsStore: ObservableObject {
         static let compactLeftHeight = "compactLeftHeight"
         // Spec: 紧凑态自定义 HTML 提示开关 —— 开启后在 Flow 岛显示 JS Bridge 推送的提示
         static let showCompactHintEnabled = "showCompactHintEnabled"
+        // Spec: 远程 URL 功能收起后保活开关 —— 开启后 Flow 岛收起时 WKWebView 继续运行（音频/JS/网络）
+        static let keepWebURLAliveWhenCollapsed = "keepWebURLAliveWhenCollapsed"
         static let showAgentDetail = "showAgentDetail"
         static let subagentVisibilityMode = "subagentVisibilityMode"
         static let legacyCodexSubagentVisibilityMode = "codexSubagentVisibilityMode"
@@ -661,6 +663,20 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(showCompactHintEnabled, forKey: Keys.showCompactHintEnabled)
+        }
+    }
+
+    /// Spec: 远程 URL 功能收起后保活开关（默认 true）。
+    /// 开启后，Flow 岛收起时远程 URL（`.webURL` / `.newsnow`）/ Mineradio 功能的 WKWebView 不会被销毁，
+    /// 音频播放、JS 执行、网络请求继续运行；下次展开时复用同一实例。
+    @Published var keepWebURLAliveWhenCollapsed: Bool = true {
+        didSet {
+            guard !isBootstrapping else { return }
+            defaults.set(keepWebURLAliveWhenCollapsed, forKey: Keys.keepWebURLAliveWhenCollapsed)
+            // 关闭保活时清空缓存，释放已保活的 WKWebView
+            if !keepWebURLAliveWhenCollapsed {
+                CustomAreaWebViewCache.shared.clearAll()
+            }
         }
     }
 
@@ -1512,6 +1528,12 @@ final class AppSettingsStore: ObservableObject {
             exists: persistedKeys.contains(Keys.showCompactHintEnabled),
             default: true
         ))
+        _keepWebURLAliveWhenCollapsed = Published(initialValue: Self.boolValue(
+            from: defaults,
+            key: Keys.keepWebURLAliveWhenCollapsed,
+            exists: persistedKeys.contains(Keys.keepWebURLAliveWhenCollapsed),
+            default: true
+        ))
         _showAgentDetail = Published(initialValue: Self.boolValue(
             from: defaults,
             key: Keys.showAgentDetail,
@@ -1776,6 +1798,11 @@ enum AppSettings {
     static var showCompactHintEnabled: Bool {
         get { shared.showCompactHintEnabled }
         set { shared.showCompactHintEnabled = newValue }
+    }
+
+    static var keepWebURLAliveWhenCollapsed: Bool {
+        get { shared.keepWebURLAliveWhenCollapsed }
+        set { shared.keepWebURLAliveWhenCollapsed = newValue }
     }
 
     static func muteReminderNotifications(for duration: TimeInterval, now: Date = Date()) {

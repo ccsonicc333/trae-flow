@@ -8,6 +8,7 @@ import SwiftUI
 struct LeftFeatureContainerView: View {
     @ObservedObject private var featureStore = LeftFeatureStore.shared
     @ObservedObject private var customAreaStore = CustomAreaStore.shared
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -44,8 +45,9 @@ struct LeftFeatureContainerView: View {
             }
         case .webURL(let urlString):
             // Spec: 远程 URL 功能 —— 构造 .remoteURL 源传入 CustomAreaWebView
+            // keepsAlive 跟随 Settings.keepWebURLAliveWhenCollapsed，开启后收起 Flow 岛时 WebView 保活
             if let url = URL(string: urlString) {
-                CustomAreaWebView(source: .remoteURL(url))
+                CustomAreaWebView(source: .remoteURL(url), keepsAlive: settings.keepWebURLAliveWhenCollapsed)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
@@ -54,8 +56,20 @@ struct LeftFeatureContainerView: View {
             }
         case .newsnow(let baseURL):
             // Spec: 内置 NewsNow 功能 —— 构造 .remoteURL 源传入 CustomAreaWebView，与 .webURL 一致
+            // keepsAlive 跟随 Settings.keepWebURLAliveWhenCollapsed
             if let url = URL(string: baseURL) {
-                CustomAreaWebView(source: .remoteURL(url))
+                CustomAreaWebView(source: .remoteURL(url), keepsAlive: settings.keepWebURLAliveWhenCollapsed)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                webURLInvalidState
+            }
+        case .mineradio(let pageURL):
+            // Spec: mineradio-bridge-compat-layer —— 构造 .mineradio 源传入 CustomAreaWebView
+            //（注入 Bridge user script + 注册 message handler + 共享 cookie store）
+            // keepsAlive 跟随 Settings.keepWebURLAliveWhenCollapsed，开启后收起 Flow 岛时 WebView 保活
+            if let url = URL(string: pageURL) {
+                CustomAreaWebView(source: .mineradio(url), keepsAlive: settings.keepWebURLAliveWhenCollapsed)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {

@@ -725,6 +725,8 @@ private struct SettingsPanelContentView: View {
     @ObservedObject private var updateManager = UpdateManager.shared
     @ObservedObject private var customAreaStore = CustomAreaStore.shared
     @ObservedObject private var leftFeatureStore = LeftFeatureStore.shared
+    // Spec: mineradio-bridge-compat-layer —— 三平台登录状态指示
+    @ObservedObject private var mineradioCoordinator = MineradioBridgeCoordinator.shared
     @State private var selectedCategory: SettingsCategory? = .general
     @State private var pendingHookReinstallProfile: ManagedHookClientProfile?
     @State private var pendingHookOptionsRequest: HookInstallOptionsRequest?
@@ -748,6 +750,11 @@ private struct SettingsPanelContentView: View {
     // 左侧功能列表中点击 NewsNow「编辑实例 URL」时弹出的编辑表单
     @State private var editingNewsNowFeature: LeftFeature?
     @State private var newsNowBaseURLDraft: String = ""
+    // Spec: mineradio-bridge-compat-layer —— Mineradio URL 编辑表单
+    @State private var editingMineradioFeature: LeftFeature?
+    @State private var mineradioPageURLDraft: String = ""
+    // Spec: mineradio-bridge-compat-layer —— Mineradio 平台登录 sheet
+    @State private var presentingMineradioLogin: MusicPlatform?
     // 左侧功能列表中点击「添加自定义区域」时弹出的新建表单
     @State private var showingAddCustomAreaSheet = false
     // 新建表单：功能类型（本地目录 / 网站 URL）
@@ -961,6 +968,70 @@ private struct SettingsPanelContentView: View {
                     newsNowBaseURLDraft = baseURL
                 }
             }
+        }
+        // Spec: mineradio-bridge-compat-layer —— Mineradio 页面 URL 编辑表单
+        .sheet(item: $editingMineradioFeature) { feature in
+            VStack(alignment: .leading, spacing: 16) {
+                Text("编辑 Mineradio 页面 URL")
+                    .font(.system(size: 14, weight: .semibold))
+                TextField("https://mineradio.art/", text: $mineradioPageURLDraft)
+                    .textFieldStyle(.roundedBorder)
+                Text("指向 Mineradio 网页版。默认使用官方实例。")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                HStack {
+                    Spacer()
+                    Button("取消") {
+                        editingMineradioFeature = nil
+                    }
+                    Button("保存") {
+                        let trimmed = mineradioPageURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if isValidMineradioURL(trimmed) {
+                            leftFeatureStore.updateMineradioPageURL(id: feature.id, pageURL: trimmed)
+                            editingMineradioFeature = nil
+                        }
+                    }
+                    .disabled(!isValidMineradioURL(mineradioPageURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)))
+                }
+            }
+            .padding(20)
+            .frame(width: 420)
+            .onAppear {
+                if case .mineradio(let pageURL) = feature.kind {
+                    mineradioPageURLDraft = pageURL
+                }
+            }
+        }
+        // Spec: mineradio-bridge-compat-layer —— 平台登录 sheet
+        .sheet(item: $presentingMineradioLogin) { platform in
+            MineradioLoginView(
+                platform: platform,
+                isPresented: Binding(
+                    get: { presentingMineradioLogin != nil },
+                    set: { if !$0 { presentingMineradioLogin = nil } }
+                )
+            )
+            .frame(minWidth: 480, minHeight: 600)
+        }
+        // Spec: mineradio-bridge-compat-layer —— 退出登录确认
+        .confirmationDialog(
+            "确认退出登录？",
+            isPresented: Binding(
+                get: { mineradioLogoutPlatform != nil },
+                set: { if !$0 { mineradioLogoutPlatform = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: mineradioLogoutPlatform
+        ) { platform in
+            Button("退出登录", role: .destructive) {
+                mineradioCoordinator.logout(platform)
+                mineradioLogoutPlatform = nil
+            }
+            Button("取消", role: .cancel) {
+                mineradioLogoutPlatform = nil
+            }
+        } message: { platform in
+            Text("退出后将清除 \(platform.displayName) 的登录 cookie，Mineradio 将无法访问该平台资源。")
         }
         .sheet(isPresented: $showingAddCustomAreaSheet) {
             addCustomAreaSheet
@@ -2012,6 +2083,24 @@ private struct SettingsPanelContentView: View {
                 Button("编辑") { editingBuiltinFeature = feature }
                     .buttonStyle(.borderless)
                     .font(.system(size: 12))
+
+            case .mineradio:
+                // Spec: mineradio-bridge-compat-layer —— 三平台登录状态指示
+                ForEach(MusicPlatform.allCases, id: \.self) { platform in
+                    mineradioLoginStatusButton(for: platform)
+                }
+                // 编辑页面 URL
+                Button {
+                    editingMineradioFeature = feature
+                } label: {
+                    Image(systemName: "globe")
+                }
+                .buttonStyle(.borderless)
+                .help("编辑页面 URL")
+                // 编辑（图标 / 名称 / 展开尺寸 / 固定）
+                Button("编辑") { editingBuiltinFeature = feature }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12))
             }
 
             // 启用开关（所有功能都有）
@@ -2037,6 +2126,8 @@ private struct SettingsPanelContentView: View {
             editingWebURLFeature = feature
         case .music, .shelf, .newsnow:
             editingBuiltinFeature = feature
+        case .mineradio:
+            editingMineradioFeature = feature
         }
     }
 
@@ -2054,6 +2145,59 @@ private struct SettingsPanelContentView: View {
         }
         return true
     }
+
+    /// Spec: mineradio-bridge-compat-layer —— 校验 Mineradio 页面 URL（与 NewsNow 同逻辑）
+    private func isValidMineradioURL(_ string: String) -> Bool {
+        isValidNewsNowURL(string)
+    }
+
+    /// Spec: mineradio-bridge-compat-layer —— 单个平台登录状态指示按钮。
+    /// 未登录 / `.unknown`：灰色图标，点击弹登录 sheet；
+    /// 已登录：绿色图标 + 昵称，点击弹退出确认。
+    @ViewBuilder
+    private func mineradioLoginStatusButton(for platform: MusicPlatform) -> some View {
+        let state = mineradioCoordinator.loginStates[platform] ?? .unknown
+        Button {
+            switch state {
+            case .loggedIn:
+                mineradioLogoutPlatform = platform
+            default:
+                presentingMineradioLogin = platform
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: platform.systemImageName)
+                    .font(.system(size: 11))
+                switch state {
+                case .unknown:
+                    Text(platform.displayName)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                case .loggedOut:
+                    Text(platform.displayName)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary.opacity(0.7))
+                case .loggedIn(let nickname):
+                    Text(nickname.isEmpty ? platform.displayName : nickname)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.green)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(state.isLoggedIn ? 0.08 : 0.04))
+            )
+        }
+        .buttonStyle(.plain)
+        .help(state.isLoggedIn ? "点击退出 \(platform.displayName) 登录" : "点击登录 \(platform.displayName)")
+    }
+
+    /// Spec: mineradio-bridge-compat-layer —— 待退出登录的平台（confirmationDialog 用）
+    @State private var mineradioLogoutPlatform: MusicPlatform?
 
     /// 新建功能表单：支持「本地目录」与「网站 URL」两种类型。
     /// 本地目录可「选择已有文件夹」或「留空按名称自动生成」；
@@ -2294,6 +2438,16 @@ private struct SettingsPanelContentView: View {
                         .labelsHidden()
                         .settingsCompactSwitch()
                 }
+            }
+
+            // Spec: 远程 URL 功能收起后保活开关
+            SettingsInfoLine(
+                title: "收起后保持运行",
+                subtitle: "开启后，URL功能在Flow岛收起时继续运行（音频/JS/网络不中断）"
+            ) {
+                Toggle("", isOn: $settings.keepWebURLAliveWhenCollapsed)
+                    .labelsHidden()
+                    .settingsCompactSwitch()
             }
         }
     }

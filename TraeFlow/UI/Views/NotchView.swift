@@ -904,6 +904,8 @@ struct NotchView: View {
             }
         case .newsnow:
             NewsNowCompactView()
+        case .mineradio:
+            MineradioCompactView()
         }
     }
 

@@ -47,12 +47,14 @@ func resolveIconKind(_ identifier: String?) -> IconKind {
 /// - customArea: 用户自定义 HTML 区域，关联 CustomArea.id
 /// - webURL: 远程网站 URL 功能（Task: extend-left-features-url-icons-jump）
 /// - newsnow: 内置 NewsNow 热点新闻功能，关联实例 baseURL（Spec: add-newsnow-built-in-feature）
+/// - mineradio: 内置 Mineradio 矿石电台，关联 pageURL，注入 Bridge 兼容层 + JSC 引擎（Spec: mineradio-bridge-compat-layer）
 enum LeftFeatureKind: Codable, Equatable, Hashable {
     case music
     case shelf
     case customArea(areaID: String)
     case webURL(url: String)
     case newsnow(baseURL: String)
+    case mineradio(pageURL: String)
 }
 
 /// 左侧 Flow 岛"功能系统"基础数据模型
@@ -152,6 +154,7 @@ extension LeftFeature {
     static let musicID = "music"
     static let shelfID = "shelf"
     static let newsnowID = "newsnow"
+    static let mineradioID = "mineradio"
 
     /// 系统图标名（SF Symbols）。优先使用 `customIconName`（非空时覆盖所有 kind 默认图标）。
     var systemImage: String {
@@ -170,6 +173,8 @@ extension LeftFeature {
             return "text:U"
         case .newsnow:
             return "newspaper"
+        case .mineradio:
+            return "antenna.radiowaves.left.and.right"
         }
     }
 
@@ -193,6 +198,8 @@ extension LeftFeature {
             return "网站"
         case .newsnow:
             return "热点新闻"
+        case .mineradio:
+            return "Mineradio"
         }
     }
 }

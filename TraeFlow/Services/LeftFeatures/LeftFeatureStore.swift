@@ -102,6 +102,7 @@ final class LeftFeatureStore: ObservableObject {
         expandedActiveFeatureID = defaults.string(forKey: Keys.expandedActiveFeatureID)
         migrateFromLegacy()
         ensureBuiltinNewsNowFeature()
+        ensureBuiltinMineradioFeature()
     }
 
     // MARK: - Loading & Persistence
@@ -144,7 +145,7 @@ final class LeftFeatureStore: ObservableObject {
         let url = Self.persistenceURL
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
 
-        // 1. 内置功能：音乐 (sortOrder: 0) / 中转站 (sortOrder: 1) / NewsNow (sortOrder: 2)
+        // 1. 内置功能：音乐 (sortOrder: 0) / 中转站 (sortOrder: 1) / NewsNow (sortOrder: 2) / Mineradio (sortOrder: 3)
         // 设置较小的默认展开高度，避免展开时占用过多屏幕空间
         features = [
             LeftFeature(
@@ -167,17 +168,25 @@ final class LeftFeatureStore: ObservableObject {
                 isEnabled: true,
                 sortOrder: 2,
                 expandedHeight: 420
+            ),
+            LeftFeature(
+                id: LeftFeature.mineradioID,
+                kind: .mineradio(pageURL: "https://mineradio.art/"),
+                isEnabled: true,
+                sortOrder: 3,
+                expandedWidth: 900,
+                expandedHeight: 600
             )
         ]
 
         // 2. 为每个 CustomArea 创建功能（按 sortOrder 降序，与 CustomAreaStore.load 排序一致）
-        // newsnow 占用 sortOrder 2，自定义区域从 3 起步
+        // mineradio 占用 sortOrder 3，自定义区域从 4 起步
         let sortedAreas = CustomAreaStore.shared.areas.sorted { $0.sortOrder > $1.sortOrder }
         for (index, area) in sortedAreas.enumerated() {
             features.append(LeftFeature(
                 kind: .customArea(areaID: area.id),
                 isEnabled: true,
-                sortOrder: 3 + index
+                sortOrder: 4 + index
             ))
         }
 
@@ -229,11 +238,52 @@ final class LeftFeatureStore: ObservableObject {
         persist()
     }
 
+    /// 老用户升级幂等追加：若 features 不含 id == mineradioID 的项则追加默认 mineradio 功能。
+    /// 已存在则不动（保留用户编辑过的 pageURL / isEnabled / sortOrder）。
+    /// Spec: mineradio-bridge-compat-layer
+    private func ensureBuiltinMineradioFeature() {
+        if let idx = features.firstIndex(where: { $0.id == LeftFeature.mineradioID }) {
+            // 已存在：确保 kind 是 .mineradio(pageURL:)（兼容未来可能的 kind 变更）
+            if case .mineradio = features[idx].kind {
+                return // 已正确，不动
+            }
+            // kind 不匹配，重写为默认 pageURL
+            features[idx].kind = .mineradio(pageURL: "https://mineradio.art/")
+            persist()
+            return
+        }
+        let maxSortOrder = features.map(\.sortOrder).max() ?? -1
+        features.append(LeftFeature(
+            id: LeftFeature.mineradioID,
+            kind: .mineradio(pageURL: "https://mineradio.art/"),
+            isEnabled: true,
+            sortOrder: maxSortOrder + 1,
+            expandedWidth: 900,
+            expandedHeight: 600
+        ))
+        persist()
+    }
+
     // MARK: - Mutation API
 
     /// 启用/禁用某个功能
     func setFeatureEnabled(id: String, isEnabled: Bool) {
         guard let index = features.firstIndex(where: { $0.id == id }) else { return }
+        // Spec: 禁用远程 URL / Mineradio 功能时驱逐保活缓存，避免 WKWebView 残留占用资源
+        if !isEnabled {
+            switch features[index].kind {
+            case .webURL(let urlString):
+                if let url = URL(string: urlString) {
+                    CustomAreaWebViewCache.shared.evict(for: url)
+                }
+            case .mineradio(let pageURL):
+                if let url = URL(string: pageURL) {
+                    CustomAreaWebViewCache.shared.evict(for: url)
+                }
+            default:
+                break
+            }
+        }
         features[index].isEnabled = isEnabled
         persist()
     }
@@ -329,7 +379,14 @@ final class LeftFeatureStore: ObservableObject {
         guard let index = features.firstIndex(where: { $0.id == id }) else { return }
         var copy = features[index]
         if let name { copy.customDisplayName = name }
-        if let url { copy.kind = .webURL(url: url) }
+        if let url {
+            // Spec: URL 变化时驱逐旧 URL 的保活缓存，避免残留 WKWebView
+            if case .webURL(let oldURLString) = copy.kind,
+               let oldURL = URL(string: oldURLString) {
+                CustomAreaWebViewCache.shared.evict(for: oldURL)
+            }
+            copy.kind = .webURL(url: url)
+        }
         // iconName 显式传入（含 nil）才覆盖；与下方 setCustomIconName 行为一致
         if iconName != nil { copy.customIconName = iconName }
         features[index] = copy
@@ -339,6 +396,11 @@ final class LeftFeatureStore: ObservableObject {
     /// 删除 URL 功能项；若 `compactFeatureID` / `expandedActiveFeatureID` 指向被删功能则置 nil
     func removeWebURLFeature(id: String) {
         guard let index = features.firstIndex(where: { $0.id == id }) else { return }
+        // Spec: 驱逐该 URL 的保活缓存，释放 WKWebView
+        if case .webURL(let urlString) = features[index].kind,
+           let url = URL(string: urlString) {
+            CustomAreaWebViewCache.shared.evict(for: url)
+        }
         features.remove(at: index)
         if compactFeatureID == id { compactFeatureID = nil }
         if expandedActiveFeatureID == id { expandedActiveFeatureID = nil }
@@ -353,6 +415,22 @@ final class LeftFeatureStore: ObservableObject {
         guard let index = features.firstIndex(where: { $0.id == id }) else { return }
         guard case .newsnow = features[index].kind else { return }
         features[index].kind = .newsnow(baseURL: baseURL)
+        persist()
+    }
+
+    // MARK: - Mineradio Feature API
+
+    /// 更新内置 Mineradio 功能的 pageURL。
+    /// 仅当该 feature 为 `.mineradio` 时重写 kind 并 persist；非 `.mineradio` 调用无效。
+    /// Spec: mineradio-bridge-compat-layer
+    func updateMineradioPageURL(id: String, pageURL: String) {
+        guard let index = features.firstIndex(where: { $0.id == id }) else { return }
+        guard case .mineradio(let oldPageURL) = features[index].kind else { return }
+        // Spec: pageURL 变化时驱逐旧 URL 的保活缓存，避免残留 WKWebView
+        if let oldURL = URL(string: oldPageURL) {
+            CustomAreaWebViewCache.shared.evict(for: oldURL)
+        }
+        features[index].kind = .mineradio(pageURL: pageURL)
         persist()
     }
 
