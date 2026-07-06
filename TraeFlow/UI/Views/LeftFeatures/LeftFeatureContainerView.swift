@@ -86,7 +86,7 @@ struct LeftFeatureContainerView: View {
             Text("未启用任何功能")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.secondary)
-            Text("在「设置 > 左侧内容」中启用功能")
+            Text("在「设置 > 左侧功能」中启用功能")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary.opacity(0.8))
         }

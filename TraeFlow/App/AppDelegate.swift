@@ -87,13 +87,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Spec: 延迟启动 MediaRemote Now Playing 轮询 —— 避免应用启动时
         // `MRMediaRemoteRegisterForNowPlayingNotifications` 的 arm64↔arm64e PAC 崩溃。
-        // 仅当音乐功能已启用时启动，节省 CPU。
+        // 仅当音乐功能或 Mineradio 功能已启用时启动（Mineradio 需要 MediaRemote 驱动歌词 progression）。
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             let features = LeftFeatureStore.shared.features
             let musicEnabled = features.contains { $0.kind == .music && $0.isEnabled }
-            NSLog("[AppDelegate] 音乐功能启用状态: \(musicEnabled) (features.count=\(features.count))")
-            if musicEnabled {
+            let mineradioEnabled = features.contains {
+                if case .mineradio = $0.kind, $0.isEnabled { return true }
+                return false
+            }
+            NSLog("[AppDelegate] 音乐功能启用状态: \(musicEnabled) mineradio=\(mineradioEnabled) (features.count=\(features.count))")
+            if musicEnabled || mineradioEnabled {
                 NowPlayingProvider.shared.start()
+            }
+            // Spec: mineradio-bridge-compat-layer —— 即使未展开过 Mineradio，也启动 NowPlaying 订阅
+            // 以便 MediaRemote 检测到 Mineradio 播放时立即更新 playback 状态（歌词 progression 需要）
+            if mineradioEnabled {
+                MineradioBridgeCoordinator.shared.startNowPlayingSubscription()
             }
         }
 

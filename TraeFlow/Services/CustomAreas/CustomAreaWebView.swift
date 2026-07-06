@@ -123,6 +123,8 @@ struct CustomAreaWebView: NSViewRepresentable {
             configuration.userContentController.addUserScript(bridgeScript)
             configuration.userContentController.add(context.coordinator, name: MineradioBridgeUserScript.apiMessageHandlerName)
             configuration.userContentController.add(context.coordinator, name: MineradioBridgeUserScript.binaryMessageHandlerName)
+            // Spec: mineradio-bridge-compat-layer —— 播放状态 handler（歌词显示用）
+            configuration.userContentController.add(context.coordinator, name: MineradioBridgeUserScript.playbackMessageHandlerName)
         }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -186,6 +188,7 @@ struct CustomAreaWebView: NSViewRepresentable {
         if source.isMineradio {
             controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.apiMessageHandlerName)
             controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.binaryMessageHandlerName)
+            controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.playbackMessageHandlerName)
         }
         // 添加新 handler
         controller.add(context.coordinator, name: Self.hintMessageHandlerName)
@@ -193,6 +196,7 @@ struct CustomAreaWebView: NSViewRepresentable {
         if source.isMineradio {
             controller.add(context.coordinator, name: MineradioBridgeUserScript.apiMessageHandlerName)
             controller.add(context.coordinator, name: MineradioBridgeUserScript.binaryMessageHandlerName)
+            controller.add(context.coordinator, name: MineradioBridgeUserScript.playbackMessageHandlerName)
         }
         // 更新 delegate
         webView.navigationDelegate = context.coordinator
@@ -476,6 +480,11 @@ struct CustomAreaWebView: NSViewRepresentable {
             }
             if message.name == MineradioBridgeUserScript.binaryMessageHandlerName {
                 MineradioBridgeCoordinator.shared.handleBinaryMessage(message)
+                return
+            }
+            // Spec: mineradio-bridge-compat-layer —— 播放状态路由（歌词显示用）
+            if message.name == MineradioBridgeUserScript.playbackMessageHandlerName {
+                MineradioBridgeCoordinator.shared.handlePlaybackMessage(message)
                 return
             }
 

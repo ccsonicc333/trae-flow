@@ -25,7 +25,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .mascot: return "宠物"
         case .sound: return "声音"
         case .integration: return "集成"
-        case .leftContent: return "左侧内容"
+        case .leftContent: return "左侧功能"
         case .about: return "关于"
         }
     }

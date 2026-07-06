@@ -225,8 +225,13 @@ final class LeftFeatureStore: ObservableObject {
     /// 老用户升级幂等追加：若 features 不含 id == newsnowID 的项则追加默认 newsnow 功能。
     /// 已存在则不动（保留用户编辑过的 baseURL / isEnabled / sortOrder）。
     /// 在 init 末尾 load() 之后调用。
+    /// Spec: 内置 newsnow 功能自动获取网站 favicon（若 customIconName 为 nil）
     private func ensureBuiltinNewsNowFeature() {
-        if features.contains(where: { $0.id == LeftFeature.newsnowID }) { return }
+        if features.contains(where: { $0.id == LeftFeature.newsnowID }) {
+            // 已存在：补获 favicon（若未设置自定义图标）
+            fetchBuiltinFaviconIfNeeded(LeftFeature.newsnowID)
+            return
+        }
         let maxSortOrder = features.map(\.sortOrder).max() ?? -1
         features.append(LeftFeature(
             id: LeftFeature.newsnowID,
@@ -236,20 +241,25 @@ final class LeftFeatureStore: ObservableObject {
             expandedHeight: 420
         ))
         persist()
+        fetchBuiltinFaviconIfNeeded(LeftFeature.newsnowID)
     }
 
     /// 老用户升级幂等追加：若 features 不含 id == mineradioID 的项则追加默认 mineradio 功能。
     /// 已存在则不动（保留用户编辑过的 pageURL / isEnabled / sortOrder）。
     /// Spec: mineradio-bridge-compat-layer
+    /// Spec: 内置 mineradio 功能自动获取网站 favicon（若 customIconName 为 nil）
     private func ensureBuiltinMineradioFeature() {
         if let idx = features.firstIndex(where: { $0.id == LeftFeature.mineradioID }) {
             // 已存在：确保 kind 是 .mineradio(pageURL:)（兼容未来可能的 kind 变更）
             if case .mineradio = features[idx].kind {
-                return // 已正确，不动
+                // 补获 favicon（若未设置自定义图标）
+                fetchBuiltinFaviconIfNeeded(LeftFeature.mineradioID)
+                return
             }
             // kind 不匹配，重写为默认 pageURL
             features[idx].kind = .mineradio(pageURL: "https://mineradio.art/")
             persist()
+            fetchBuiltinFaviconIfNeeded(LeftFeature.mineradioID)
             return
         }
         let maxSortOrder = features.map(\.sortOrder).max() ?? -1
@@ -262,6 +272,29 @@ final class LeftFeatureStore: ObservableObject {
             expandedHeight: 600
         ))
         persist()
+        fetchBuiltinFaviconIfNeeded(LeftFeature.mineradioID)
+    }
+
+    /// Spec: 为内置 newsnow/mineradio 功能自动获取网站 favicon。
+    /// 仅当 `customIconName` 为 nil 时触发（首次安装或老用户升级时补获）。
+    /// 已获取过 favicon（`img:favicon-` 前缀）或用户已自定义图标则跳过，避免每次启动发网络请求。
+    private func fetchBuiltinFaviconIfNeeded(_ featureID: String) {
+        guard let feature = features.first(where: { $0.id == featureID }) else { return }
+        // 已有图标（favicon 或用户自定义）则跳过
+        if let icon = feature.customIconName, !icon.isEmpty {
+            return
+        }
+        let url: URL?
+        switch feature.kind {
+        case .newsnow(let baseURL):
+            url = URL(string: baseURL)
+        case .mineradio(let pageURL):
+            url = URL(string: pageURL)
+        default:
+            return
+        }
+        guard let url = url else { return }
+        fetchFaviconForFeature(id: featureID, url: url)
     }
 
     // MARK: - Mutation API
