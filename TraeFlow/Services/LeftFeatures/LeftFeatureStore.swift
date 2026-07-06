@@ -354,6 +354,9 @@ final class LeftFeatureStore: ObservableObject {
     /// 新建 URL 网站功能项。
     /// `variant` 参数当前对 `.webURL` 无实际用途（仅 `.customArea` 用 `defaultVariant` 跳转 IDE），
     /// 保留参数以便新建/编辑表单对两种类型统一调用，此处忽略。
+    ///
+    /// Spec: 若 `iconName` 为 nil（用户未指定自定义图标），则异步获取网站 favicon 并写入 `customIconName`。
+    /// 失败时不写入，回退到 `systemImage` 默认文字图标「U」。
     @discardableResult
     func appendWebURLFeature(name: String, url: String, iconName: String?, variant: TraeVariant) -> LeftFeature {
         let maxSortOrder = features.map(\.sortOrder).max() ?? -1
@@ -366,11 +369,19 @@ final class LeftFeatureStore: ObservableObject {
         )
         features.append(feature)
         persist()
+
+        // Spec: 自动获取 favicon（仅当用户未指定自定义图标时）
+        if iconName == nil, let url = URL(string: url) {
+            fetchFaviconForFeature(id: feature.id, url: url)
+        }
         return feature
     }
 
     /// 编辑 URL 功能元数据。
     /// 仅传入非 nil 的字段才会被更新；`variant` 参数当前忽略（见 `appendWebURLFeature`）。
+    ///
+    /// Spec: URL 变化时若当前图标是自动获取的 favicon（`img:favicon-` 前缀），清空 `customIconName` 并触发重新获取；
+    /// 用户显式设置过 `iconName`（非 favicon 前缀）则保留不动。
     func updateWebURLFeature(id: String,
                              name: String?,
                              url: String?,
@@ -379,18 +390,43 @@ final class LeftFeatureStore: ObservableObject {
         guard let index = features.firstIndex(where: { $0.id == id }) else { return }
         var copy = features[index]
         if let name { copy.customDisplayName = name }
+
+        var urlChanged = false
+        var newURLString: String?
         if let url {
-            // Spec: URL 变化时驱逐旧 URL 的保活缓存，避免残留 WKWebView
-            if case .webURL(let oldURLString) = copy.kind,
-               let oldURL = URL(string: oldURLString) {
-                CustomAreaWebViewCache.shared.evict(for: oldURL)
+            if case .webURL(let oldURLString) = copy.kind {
+                if oldURLString != url {
+                    urlChanged = true
+                }
+                // Spec: URL 变化时驱逐旧 URL 的保活缓存，避免残留 WKWebView
+                if let oldURL = URL(string: oldURLString) {
+                    CustomAreaWebViewCache.shared.evict(for: oldURL)
+                }
             }
             copy.kind = .webURL(url: url)
+            newURLString = url
         }
-        // iconName 显式传入（含 nil）才覆盖；与下方 setCustomIconName 行为一致
-        if iconName != nil { copy.customIconName = iconName }
+
+        // iconName 显式传入（非 nil）才覆盖；nil 表示用户未在表单修改图标字段
+        if let iconName {
+            copy.customIconName = iconName
+        }
+
+        // Spec: URL 变化且用户未显式传 iconName 时，清掉自动获取的 favicon 以触发重新获取
+        var needsRefetch = false
+        if urlChanged, iconName == nil,
+           let currentIcon = copy.customIconName,
+           currentIcon.hasPrefix("img:favicon-") {
+            copy.customIconName = nil
+            needsRefetch = true
+        }
+
         features[index] = copy
         persist()
+
+        if needsRefetch, let urlString = newURLString, let url = URL(string: urlString) {
+            fetchFaviconForFeature(id: id, url: url)
+        }
     }
 
     /// 删除 URL 功能项；若 `compactFeatureID` / `expandedActiveFeatureID` 指向被删功能则置 nil
@@ -405,6 +441,24 @@ final class LeftFeatureStore: ObservableObject {
         if compactFeatureID == id { compactFeatureID = nil }
         if expandedActiveFeatureID == id { expandedActiveFeatureID = nil }
         persist()
+    }
+
+    /// Spec: 异步获取网站 favicon 并写入 `customIconName`。
+    /// 主线程回调，避免非主线程修改 @Published。失败时不写入（回退到默认文字图标）。
+    /// 仅当当前 `customIconName` 为 nil 或仍是自动获取的 favicon（`img:favicon-` 前缀）时才覆盖，
+    /// 避免覆盖用户显式设置的图标。
+    private func fetchFaviconForFeature(id: String, url: URL) {
+        FaviconFetcher.fetch(for: url) { [weak self] iconID in
+            guard let self, let iconID else { return }
+            guard let index = self.features.firstIndex(where: { $0.id == id }) else { return }
+            let current = self.features[index].customIconName
+            // 仅当未设置图标，或当前图标是自动获取的 favicon 时覆盖
+            let shouldApply = current == nil
+                || (current?.hasPrefix("img:favicon-") ?? false)
+            guard shouldApply else { return }
+            self.features[index].customIconName = iconID
+            self.persist()
+        }
     }
 
     // MARK: - NewsNow Feature API

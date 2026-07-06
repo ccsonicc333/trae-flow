@@ -771,6 +771,11 @@ private struct SettingsPanelContentView: View {
     @State private var iconImageError: String?
     // 新建表单：是否允许请求外部接口（仅本地目录类型显示）
     @State private var newCustomAreaAllowsNetwork = false
+    // Spec: webURL 模式自动获取图标/名称的 debounce token + 上次自动填入的名称（用于判断是否覆盖用户输入）
+    @State private var metadataFetchToken: UUID?
+    @State private var autoFilledName: String?
+    @State private var autoFilledIconImage: String?
+    @State private var isFetchingMetadata = false
 
     var body: some View {
         ZStack {
@@ -2202,6 +2207,7 @@ private struct SettingsPanelContentView: View {
     /// 新建功能表单：支持「本地目录」与「网站 URL」两种类型。
     /// 本地目录可「选择已有文件夹」或「留空按名称自动生成」；
     /// 网站 URL 需输入合法 http/https 链接。
+    /// Spec: webURL 模式下 URL 放第一位，URL 合法时 debounce 后自动获取网站 favicon + 标题填入图标和名称字段。
     private var addCustomAreaSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("新建功能")
@@ -2215,71 +2221,23 @@ private struct SettingsPanelContentView: View {
             }
             .pickerStyle(.segmented)
 
-            // 图标 + 实时预览（图片优先，否则文字；均空回退默认 globe）
-            VStack(alignment: .leading, spacing: 6) {
-                Text("图标")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                HStack(spacing: 10) {
-                    FeatureIconView(iconID: resolvedNewCustomAreaIconID, fallbackSymbol: "globe", size: 18, color: .accentColor)
-                        .frame(width: 22)
-                    TextField("输入文字或选择图片", text: $newCustomAreaIconText)
-                        .textFieldStyle(.roundedBorder)
-                    Button("选择图片…") {
-                        showingIconImagePicker = true
-                    }
-                    if newCustomAreaIconImage != nil {
-                        Button("删除图片") {
-                            newCustomAreaIconImage = nil
-                            iconImageError = nil
-                        }
-                        .foregroundColor(.red)
-                        .font(.caption)
-                    }
-                }
-                if let iconImageError {
-                    Text(iconImageError)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                }
-            }
-
-            // 名称
-            VStack(alignment: .leading, spacing: 6) {
-                Text("名称")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("名称", text: $newCustomAreaName)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            // 按类型渲染差异输入区
+            // Spec: 按类型渲染不同字段顺序
             switch newFeatureType {
             case .localDirectory:
-                // 本地目录按名称自动生成，无需选择已有文件夹
+                // 本地目录：图标 → 名称 → 目录提示 → 网络开关
+                newFeatureIconRow
+                newFeatureNameRow
                 Text("目录将按名称自动生成")
                     .font(.caption)
                     .foregroundColor(.secondary)
-            case .webURL:
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("URL")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    TextField("https://example.com", text: $newFeatureURLString)
-                        .textFieldStyle(.roundedBorder)
-                        .disableAutocorrection(true)
-                    if !newFeatureURLString.isEmpty, !isNewWebURLValid {
-                        Text("请输入合法的 http 或 https 链接")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                }
-            }
-
-            // 仅本地目录类型显示网络开关
-            if newFeatureType == .localDirectory {
                 Toggle("允许请求外部接口", isOn: $newCustomAreaAllowsNetwork)
                     .font(.caption)
+
+            case .webURL:
+                // Spec: webURL 模式 URL 放第一位 → 名称 → 图标
+                newFeatureURLRow
+                newFeatureNameRow
+                newFeatureIconRow
             }
 
             HStack {
@@ -2329,6 +2287,123 @@ private struct SettingsPanelContentView: View {
                 }
             case .failure:
                 break
+            }
+        }
+    }
+
+    // MARK: - New Feature Form Rows
+
+    /// Spec: URL 输入行（webURL 模式第一位）。URL 合法时 debounce 600ms 后自动获取网站 favicon + 标题。
+    private var newFeatureURLRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("URL")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if isFetchingMetadata {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("获取图标和名称…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            TextField("https://example.com", text: $newFeatureURLString)
+                .textFieldStyle(.roundedBorder)
+                .disableAutocorrection(true)
+                .onChange(of: newFeatureURLString) { newValue in
+                    scheduleMetadataFetch(for: newValue)
+                }
+            if !newFeatureURLString.isEmpty, !isNewWebURLValid {
+                Text("请输入合法的 http 或 https 链接")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+    }
+
+    /// 名称输入行。
+    private var newFeatureNameRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("名称")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            TextField("名称", text: $newCustomAreaName)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    /// 图标输入行（文字 + 图片选择 + 实时预览）。
+    private var newFeatureIconRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("图标")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            HStack(spacing: 10) {
+                FeatureIconView(iconID: resolvedNewCustomAreaIconID, fallbackSymbol: "globe", size: 18, color: .accentColor)
+                    .frame(width: 22)
+                TextField("输入文字或选择图片", text: $newCustomAreaIconText)
+                    .textFieldStyle(.roundedBorder)
+                Button("选择图片…") {
+                    showingIconImagePicker = true
+                }
+                if newCustomAreaIconImage != nil {
+                    Button("删除图片") {
+                        newCustomAreaIconImage = nil
+                        autoFilledIconImage = nil
+                        iconImageError = nil
+                    }
+                    .foregroundColor(.red)
+                    .font(.caption)
+                }
+            }
+            if let iconImageError {
+                Text(iconImageError)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+    }
+
+    /// Spec: debounce 600ms 后触发 `FaviconFetcher.fetchMetadata`。
+    /// 名称覆盖规则：当前名称为空，或等于上次自动填入的 `autoFilledName` 时才覆盖；
+    /// 用户手动修改过则保留。
+    /// 图标覆盖规则：当前无图片，或图片等于上次自动填入的 `autoFilledIconImage` 时才覆盖；
+    /// 用户手动选择过图片则保留。
+    private func scheduleMetadataFetch(for urlString: String) {
+        // 校验 URL 合法性
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            isFetchingMetadata = false
+            return
+        }
+        let token = UUID()
+        metadataFetchToken = token
+        isFetchingMetadata = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            // debounce：若期间 URL 又变化，token 不匹配则跳过
+            guard token == metadataFetchToken else { return }
+            FaviconFetcher.fetchMetadata(for: url) { metadata in
+                guard token == metadataFetchToken else { return }
+                isFetchingMetadata = false
+                // 名称：仅当为空或等于上次自动填入值时覆盖
+                if let title = metadata.title, !title.isEmpty {
+                    let trimmedName = newCustomAreaName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmedName.isEmpty || trimmedName == autoFilledName {
+                        newCustomAreaName = title
+                        autoFilledName = title
+                    }
+                }
+                // 图标：仅当无图片或图片是上次自动填入的 favicon 时覆盖
+                if let iconID = metadata.iconID {
+                    if newCustomAreaIconImage == nil || newCustomAreaIconImage == autoFilledIconImage {
+                        newCustomAreaIconImage = iconID
+                        autoFilledIconImage = iconID
+                        // 图片优先，清空文字输入避免歧义
+                        newCustomAreaIconText = ""
+                    }
+                }
             }
         }
     }
@@ -2402,6 +2477,11 @@ private struct SettingsPanelContentView: View {
         newCustomAreaIconImage = nil
         iconImageError = nil
         newCustomAreaAllowsNetwork = false
+        // Spec: 重置自动获取相关 state
+        metadataFetchToken = nil
+        autoFilledName = nil
+        autoFilledIconImage = nil
+        isFetchingMetadata = false
     }
 
     // MARK: - Left Content: Flow Island Display

@@ -6,7 +6,7 @@
     <false/>
     <key>com.apple.security.automation.apple-events</key>
     <true/>
-    <key>com.apple.security.files.user-selected.read-only</key>
+    <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
     <!-- MediaRemote 为系统私有框架；禁用库验证以允许 dlopen 加载并调用 -->
     <key>com.apple.security.cs.disable-library-validation</key>

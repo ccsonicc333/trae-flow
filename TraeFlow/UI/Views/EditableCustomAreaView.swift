@@ -41,6 +41,12 @@ struct EditableCustomAreaView: View {
     @State private var expandedWidth: Double
     @State private var expandedHeight: Double
 
+    // Spec: webURL 模式自动获取图标/名称的 debounce state
+    @State private var metadataFetchToken: UUID?
+    @State private var autoFilledName: String?
+    @State private var autoFilledIconImage: String?
+    @State private var isFetchingMetadata = false
+
     /// 本地目录模式初始化
     init(area: CustomArea, onSave: @escaping (CustomArea) -> Void) {
         _mode = State(initialValue: .customArea(area))
@@ -83,6 +89,11 @@ struct EditableCustomAreaView: View {
         _useCustomExpandedSize = State(initialValue: feature.expandedWidth != nil)
         _expandedWidth = State(initialValue: feature.expandedWidth ?? AppSettings.shared.expandedPanelWidth)
         _expandedHeight = State(initialValue: feature.expandedHeight ?? AppSettings.shared.maxPanelHeight)
+        // Spec: 若已有图标是自动获取的 favicon（img:favicon- 前缀），记为 autoFilledIconImage，
+        // 这样 URL 变化时允许覆盖；用户手动设置的图标不会被覆盖。
+        if let img = parsed.image, img.hasPrefix("img:favicon-") {
+            _autoFilledIconImage = State(initialValue: img)
+        }
     }
 
     /// 内置功能（music / shelf）模式初始化
@@ -134,68 +145,25 @@ struct EditableCustomAreaView: View {
             Text(titleText)
                 .font(.headline)
 
-            // 图标 + 实时预览（图片优先，否则文字；均空回退默认 globe）
-            VStack(alignment: .leading, spacing: 6) {
-                Text("图标")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                HStack(spacing: 10) {
-                    FeatureIconView(iconID: resolvedIconID, fallbackSymbol: "globe", size: 18, color: .accentColor)
-                        .frame(width: 22)
-                    TextField("输入文字或选择图片", text: $iconText)
-                        .textFieldStyle(.roundedBorder)
-                    Button("选择图片…") {
-                        showingIconImagePicker = true
-                    }
-                    if iconImage != nil {
-                        Button("删除图片") {
-                            iconImage = nil
-                            iconImageError = nil
-                        }
-                        .foregroundColor(.red)
-                        .font(.caption)
-                    }
-                }
-                if let iconImageError {
-                    Text(iconImageError)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                }
-            }
-
-            // 名称
-            VStack(alignment: .leading, spacing: 6) {
-                Text("名称")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("名称", text: $name)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            // 按模式渲染差异字段
+            // Spec: 按模式渲染不同字段顺序
             switch mode {
             case .customArea:
+                // 本地目录：图标 → 名称 → 网络开关
+                iconRow
+                nameRow
                 Toggle("允许请求外部接口", isOn: $allowsNetwork)
                     .font(.caption)
 
             case .webURL:
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("URL")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    TextField("https://example.com", text: $url)
-                        .textFieldStyle(.roundedBorder)
-                        .disableAutocorrection(true)
-                    if !url.isEmpty, !isURLValid {
-                        Text("请输入合法的 http 或 https 链接")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                }
+                // Spec: webURL 模式 URL 放第一位 → 名称 → 图标
+                urlRow
+                nameRow
+                iconRow
 
             case .builtin:
-                // 内置功能无额外字段，仅图标/名称/展开尺寸/固定开关
-                EmptyView()
+                // 内置功能：图标 → 名称
+                iconRow
+                nameRow
             }
 
             // 展开尺寸 + 固定开关（所有模式共用）
@@ -270,6 +238,118 @@ struct EditableCustomAreaView: View {
     }
 
     // MARK: - Helpers
+
+    /// Spec: URL 输入行（webURL 模式第一位）。URL 合法时 debounce 600ms 后自动获取网站 favicon + 标题。
+    private var urlRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("URL")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if isFetchingMetadata {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("获取图标和名称…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            TextField("https://example.com", text: $url)
+                .textFieldStyle(.roundedBorder)
+                .disableAutocorrection(true)
+                .onChange(of: url) { newValue in
+                    scheduleMetadataFetch(for: newValue)
+                }
+            if !url.isEmpty, !isURLValid {
+                Text("请输入合法的 http 或 https 链接")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+    }
+
+    /// 名称输入行。
+    private var nameRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("名称")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            TextField("名称", text: $name)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    /// 图标输入行（文字 + 图片选择 + 实时预览）。
+    private var iconRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("图标")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            HStack(spacing: 10) {
+                FeatureIconView(iconID: resolvedIconID, fallbackSymbol: "globe", size: 18, color: .accentColor)
+                    .frame(width: 22)
+                TextField("输入文字或选择图片", text: $iconText)
+                    .textFieldStyle(.roundedBorder)
+                Button("选择图片…") {
+                    showingIconImagePicker = true
+                }
+                if iconImage != nil {
+                    Button("删除图片") {
+                        iconImage = nil
+                        autoFilledIconImage = nil
+                        iconImageError = nil
+                    }
+                    .foregroundColor(.red)
+                    .font(.caption)
+                }
+            }
+            if let iconImageError {
+                Text(iconImageError)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+    }
+
+    /// Spec: debounce 600ms 后触发 `FaviconFetcher.fetchMetadata`。
+    /// 名称覆盖规则：当前名称为空，或等于上次自动填入的 `autoFilledName` 时才覆盖；
+    /// 用户手动修改过则保留。
+    /// 图标覆盖规则：当前无图片，或图片等于上次自动填入的 `autoFilledIconImage` 时才覆盖；
+    /// 用户手动选择过图片则保留。
+    private func scheduleMetadataFetch(for urlString: String) {
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            isFetchingMetadata = false
+            return
+        }
+        let token = UUID()
+        metadataFetchToken = token
+        isFetchingMetadata = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            guard token == metadataFetchToken else { return }
+            FaviconFetcher.fetchMetadata(for: url) { metadata in
+                guard token == metadataFetchToken else { return }
+                isFetchingMetadata = false
+                // 名称：仅当为空或等于上次自动填入值时覆盖
+                if let title = metadata.title, !title.isEmpty {
+                    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmedName.isEmpty || trimmedName == autoFilledName {
+                        name = title
+                        autoFilledName = title
+                    }
+                }
+                // 图标：仅当无图片或图片是上次自动填入的 favicon 时覆盖
+                if let iconID = metadata.iconID {
+                    if iconImage == nil || iconImage == autoFilledIconImage {
+                        iconImage = iconID
+                        autoFilledIconImage = iconID
+                        iconText = ""
+                    }
+                }
+            }
+        }
+    }
 
     private var titleText: String {
         switch mode {

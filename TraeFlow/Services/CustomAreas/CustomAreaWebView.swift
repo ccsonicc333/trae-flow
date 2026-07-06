@@ -425,6 +425,36 @@ struct CustomAreaWebView: NSViewRepresentable {
             nil
         }
 
+        /// Spec: 响应网页 `<input type="file">` 点击 —— 默认 WKUIDelegate 不实现此方法时
+        /// 文件选择器不会弹出（点击无反应）。Mineradio 背景媒体上传等场景需要此回调。
+        /// 根据 `accept` MIME 类型构造 NSOpenPanel 允许的文件类型，用户选择后通过
+        /// `completionHandler` 回传 URL 数组；取消则回传空数组（必须调用 completionHandler，
+        /// 否则网页端 Promise 永久挂起）。
+        func webView(
+            _ webView: WKWebView,
+            runOpenPanelWith parameters: WKOpenPanelParameters,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping ([URL]?) -> Void
+        ) {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+
+            // Spec: 根据 WKOpenPanelParameters.allowedFileTypes 过滤（macOS 13+ 不再提供该属性，
+            // 由网页 accept 属性解析已不可得，这里直接允许所有文件类型，交给用户自行选择）
+            panel.allowsOtherFileTypes = true
+
+            panel.beginSheetModal(for: NSApp.keyWindow ?? NSApp.mainWindow ?? webView.window ?? NSWindow()) { response in
+                if response == .OK {
+                    completionHandler(panel.urls)
+                } else {
+                    // 必须回传空数组而非 nil，避免网页端 Promise 挂起
+                    completionHandler([])
+                }
+            }
+        }
+
         // MARK: - JS Bridge: traeFlowHint
 
         /// Spec: 接收自定义 HTML 通过 `window.webkit.messageHandlers.traeFlowHint.postMessage(...)` 推送的提示。

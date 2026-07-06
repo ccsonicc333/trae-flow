@@ -13,7 +13,23 @@ struct FeatureIconView: View {
     var color: Color = .white
 
     var body: some View {
-        switch resolveIconKind(iconID) {
+        renderContent(effectiveKind)
+    }
+
+    /// Spec: fallbackSymbol 也支持 `sf:`/`text:`/`img:` 前缀（与 iconID 一致），
+    /// 例如 `.webURL` 默认 `systemImage = "text:U"` 应渲染为文字「U」而非 SF Symbol。
+    /// 当 iconID 为 nil/空/none 时，用 resolveIconKind(fallbackSymbol) 解析。
+    private var effectiveKind: IconKind {
+        let resolved = resolveIconKind(iconID)
+        if case .none = resolved {
+            return resolveIconKind(fallbackSymbol)
+        }
+        return resolved
+    }
+
+    @ViewBuilder
+    private func renderContent(_ kind: IconKind) -> some View {
+        switch kind {
         case .sfSymbol(let name):
             Image(systemName: name)
                 .font(.system(size: size))
@@ -32,13 +48,14 @@ struct FeatureIconView: View {
                     .frame(width: size, height: size)
                     .clipShape(RoundedRectangle(cornerRadius: size * 0.2))
             } else {
-                // 图片加载失败回退
-                Image(systemName: fallbackSymbol)
+                // 图片加载失败回退到 SF Symbol "globe"
+                Image(systemName: "globe")
                     .font(.system(size: size))
                     .foregroundColor(color)
             }
         case .none:
-            Image(systemName: fallbackSymbol)
+            // iconID 与 fallbackSymbol 都为空 → 最终兜底 "globe"
+            Image(systemName: "globe")
                 .font(.system(size: size))
                 .foregroundColor(color)
         }
