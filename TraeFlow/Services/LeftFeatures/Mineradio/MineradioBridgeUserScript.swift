@@ -145,6 +145,13 @@ enum MineradioBridgeUserScript {
   var currentProvider = 'netease';
   var lastPostedSongId = null;
   var lastPostedPlayback = 0;
+  /// Spec: 由 MINERADIO_API 拦截缓存的 songId（可能是预缓冲的下一首歌，还未实际播放）
+  /// 仅当 audio.src 真正变化时才提升为 currentSongId 并通知 Swift 端
+  var pendingSongId = null;
+  /// Spec: 上次通知 Swift 端的 audio.src（用于检测 src 变化）
+  var lastNotifiedSrc = '';
+  /// Spec: 已通知 Swift 端的 songId（避免重复通知同一首歌）
+  var notifiedSongId = null;
 
   function postMsg(payload) {
     try {
@@ -264,6 +271,29 @@ enum MineradioBridgeUserScript {
     postPlayback(audio);
   }
 
+  /// Spec: 当 audio.src 真正变化时，发 trackChanged 消息通知 Swift 端实际切歌。
+  /// 这是唯一可靠的切歌信号 —— mineradio.art 会在当前歌曲后半段提前请求下一首歌的
+  /// URL/lyric（预缓冲），此时 MINERADIO_API 拦截会拿到下一首 songId，但 audio.src
+  /// 还没变。只有当 audio.src 真正改变时才是实际播放切换。
+  function notifyTrackChanged(audio) {
+    var newSrc = audio.src || '';
+    if (newSrc === lastNotifiedSrc) return;
+    lastNotifiedSrc = newSrc;
+    // Spec: 把 pendingSongId 提升为 currentSongId（实际播放了）
+    if (pendingSongId && pendingSongId !== currentSongId) {
+      currentSongId = pendingSongId;
+    }
+    var sid = currentSongId;
+    if (sid && sid !== notifiedSongId) {
+      notifiedSongId = sid;
+      // 立即发 trackChanged，Swift 端据此更新 songId/cover/lyric
+      postMsg({ type: 'trackChanged', songId: sid, provider: currentProvider });
+      // 同时发 song 消息（带 title/artist/coverURL，从 DOM 提取）
+      // 延迟 300ms 等 DOM 更新完成
+      setTimeout(function() { postSong(); }, 300);
+    }
+  }
+
   function scanAudios() {
     try {
       var audios = document.querySelectorAll('audio');
@@ -275,7 +305,7 @@ enum MineradioBridgeUserScript {
   // 三重 hook 策略确保拦截所有 audio 创建/播放路径：
   // 1. Patch window.Audio 构造器 — 拦截 `new Audio()`
   // 2. Patch HTMLMediaElement.prototype.play — 拦截任何 audio/video 调用 play()
-  // 3. Patch HTMLMediaElement.prototype.src setter — 拦截设置 src
+  // 3. Patch HTMLMediaElement.prototype.src setter — 拦截设置 src（切歌信号）
   // 4. MutationObserver + 定期扫描 DOM 作为兜底
   try {
     if (!window.__mineradioAudioPatched) {
@@ -298,15 +328,18 @@ enum MineradioBridgeUserScript {
       }
 
       // 2. Patch HTMLMediaElement.prototype.play — 最可靠：任何 audio 元素调用 play 都会触发
+      // Spec: play() 也是切歌信号之一（新 audio 元素首次 play，或同元素 src 改变后 play）
       var OriginalPlay = HTMLMediaElement.prototype.play;
       if (OriginalPlay) {
         HTMLMediaElement.prototype.play = function () {
           attachAudio(this);
+          notifyTrackChanged(this);
           return OriginalPlay.apply(this, arguments);
         };
       }
 
-      // 3. Patch HTMLMediaElement.prototype.src setter — 设置 src 时即 attach（早于 play）
+      // 3. Patch HTMLMediaElement.prototype.src setter — 设置 src 时即 attach + 通知切歌
+      // Spec: src 变化是最可靠的切歌信号（早于 play）
       var srcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
       if (srcDesc && srcDesc.set) {
         var origSrcSet = srcDesc.set;
@@ -316,6 +349,7 @@ enum MineradioBridgeUserScript {
           set: function (v) {
             attachAudio(this);
             if (origSrcSet) origSrcSet.call(this, v);
+            notifyTrackChanged(this);
           },
           configurable: true,
           enumerable: true
@@ -362,9 +396,13 @@ enum MineradioBridgeUserScript {
       if (kgId != null && String(kgId) !== '') sid = String(kgId);
       currentProvider = 'kugou';
     }
-    if (sid && sid !== currentSongId) {
-      currentSongId = sid;
-      postSong();
+    if (sid && sid !== pendingSongId) {
+      // Spec: 只缓存到 pendingSongId，不发 postSong。
+      // mineradio.art 会在当前歌曲后半段提前请求下一首歌的 URL/lyric（预缓冲），
+      // 此时 songId 是下一首歌的，但 audio.src 还没变。
+      // 只有当 audio.src 真正变化时（notifyTrackChanged）才通知 Swift 端切歌。
+      // currentProvider 已在上面的 if/else 分支里设置。
+      pendingSongId = sid;
     }
   });
 

@@ -145,47 +145,51 @@ final class LeftFeatureStore: ObservableObject {
         let url = Self.persistenceURL
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
 
-        // 1. 内置功能：音乐 (sortOrder: 0) / 中转站 (sortOrder: 1) / NewsNow (sortOrder: 2) / Mineradio (sortOrder: 3)
+        // 1. 内置功能默认配置：
+        //    - Mineradio（sortOrder: 0，默认启用）—— 用户首要功能
+        //    - NewsNow 热点新闻（sortOrder: 1，默认启用）—— 用户次要功能
+        //    - 音乐（sortOrder: 2，默认禁用）—— 可选
+        //    - 中转站（sortOrder: 3，默认禁用）—— 可选
         // 设置较小的默认展开高度，避免展开时占用过多屏幕空间
         features = [
             LeftFeature(
-                id: LeftFeature.musicID,
-                kind: .music,
+                id: LeftFeature.mineradioID,
+                kind: .mineradio(pageURL: "https://mineradio.art/"),
                 isEnabled: true,
                 sortOrder: 0,
-                expandedHeight: 280
-            ),
-            LeftFeature(
-                id: LeftFeature.shelfID,
-                kind: .shelf,
-                isEnabled: true,
-                sortOrder: 1,
-                expandedHeight: 280
+                expandedWidth: 900,
+                expandedHeight: 600
             ),
             LeftFeature(
                 id: LeftFeature.newsnowID,
                 kind: .newsnow(baseURL: "https://newsnow.busiyi.world"),
                 isEnabled: true,
-                sortOrder: 2,
+                sortOrder: 1,
                 expandedHeight: 420
             ),
             LeftFeature(
-                id: LeftFeature.mineradioID,
-                kind: .mineradio(pageURL: "https://mineradio.art/"),
-                isEnabled: true,
+                id: LeftFeature.musicID,
+                kind: .music,
+                isEnabled: false,
+                sortOrder: 2,
+                expandedHeight: 280
+            ),
+            LeftFeature(
+                id: LeftFeature.shelfID,
+                kind: .shelf,
+                isEnabled: false,
                 sortOrder: 3,
-                expandedWidth: 900,
-                expandedHeight: 600
+                expandedHeight: 280
             )
         ]
 
         // 2. 为每个 CustomArea 创建功能（按 sortOrder 降序，与 CustomAreaStore.load 排序一致）
-        // mineradio 占用 sortOrder 3，自定义区域从 4 起步
+        // 内置功能占用 sortOrder 0-3，自定义区域从 4 起步
         let sortedAreas = CustomAreaStore.shared.areas.sorted { $0.sortOrder > $1.sortOrder }
         for (index, area) in sortedAreas.enumerated() {
             features.append(LeftFeature(
                 kind: .customArea(areaID: area.id),
-                isEnabled: true,
+                isEnabled: false,
                 sortOrder: 4 + index
             ))
         }
@@ -324,8 +328,44 @@ final class LeftFeatureStore: ObservableObject {
     /// 重排功能顺序；重排后按新顺序重写所有 `sortOrder`
     /// `source` 为待移动元素的原始索引集合，`destination` 为目标位置
     /// （遵循 SwiftUI `.onMove` 的语义：destination 指向插入后的起始索引）。
+    ///
+    /// Spec: UI 显示的是 `features.sorted(by: sortOrder)`，但 `features` 数组本身
+    /// 可能未按 sortOrder 排序（历史原因）。`.onMove` 的 source/destination 索引基于
+    /// 排序后的列表，因此必须先按 sortOrder 排序再 move，否则索引不匹配导致拖拽错乱。
     func moveFeature(from source: IndexSet, to destination: Int) {
+        // 先按 sortOrder 排序，使数组顺序与 UI 显示一致
+        features.sort { $0.sortOrder < $1.sortOrder }
+        // 再执行 move（此时索引与 UI 一致）
         features.move(fromOffsets: source, toOffset: destination)
+        // 重写所有 sortOrder
+        for (index, _) in features.enumerated() {
+            features[index].sortOrder = index
+        }
+        persist()
+    }
+
+    /// Spec: 基于 feature ID 的拖拽重排（用于展开态切换栏的 onDrag/onDrop）。
+    /// `sourceID`: 被拖拽的功能 ID
+    /// `targetID`: 放置目标的功能 ID
+    /// `dropBefore`: true = 插入到 target 之前，false = 插入到 target 之后
+    func moveFeatureByID(sourceID: String, targetID: String, dropBefore: Bool) {
+        guard sourceID != targetID else { return }
+        // 先排序确保数组与 UI 一致
+        features.sort { $0.sortOrder < $1.sortOrder }
+        guard let sourceIndex = features.firstIndex(where: { $0.id == sourceID }),
+              let targetIndex = features.firstIndex(where: { $0.id == targetID }) else { return }
+
+        // 计算目标插入位置（SwiftUI .onMove 语义：插入后的起始索引）
+        var destination: Int
+        if dropBefore {
+            destination = targetIndex
+        } else {
+            destination = targetIndex + 1
+        }
+        // 如果 source 在 destination 之前，move 后 target 会左移一位
+        // 不需要额外调整，features.move 会正确处理
+
+        features.move(fromOffsets: IndexSet([sourceIndex]), toOffset: destination)
         for (index, _) in features.enumerated() {
             features[index].sortOrder = index
         }
