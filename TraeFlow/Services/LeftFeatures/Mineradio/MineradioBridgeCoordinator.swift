@@ -101,7 +101,11 @@ final class MineradioBridgeCoordinator: ObservableObject {
     /// Spec: 处理 NowPlayingProvider 更新 —— 检测是否来自 Mineradio 播放。
     /// Mineradio 在 WKWebView 内播放 `<audio>`，系统 MediaRemote 会把 TRAE FLOW app 作为 source，
     /// title 通常是网页 `<title>`（"Mineradio — 在线音乐可视化播放器"）。
-    /// 一旦确认是 Mineradio 播放，用其 elapsed/duration/isPlaying 更新 `playback` 并驱动歌词 progression。
+    ///
+    /// Spec: MediaRemote 仅用于检测"是否有 Mineradio 在播放"（isPlaying）和补全 title/artist，
+    /// **不取其 elapsed/duration** —— MediaRemote 是异步轮询系统播放器，切歌瞬间可能还报告
+    /// 旧 elapsed，用旧 elapsed 在新歌词数组里查找会显示错误的歌词行。
+    /// elapsed/duration 只由 WKWebView `playback` 消息提供（直接来自 audio.currentTime，最准确）。
     private func handleNowPlayingUpdate(_ info: NowPlayingInfo?) {
         guard let info = info else {
             // 播放停止：若之前是 Mineradio 在播，清空状态
@@ -124,26 +128,21 @@ final class MineradioBridgeCoordinator: ObservableObject {
 
         isMineradioPlaying = info.isPlaying
 
-        // 用 MediaRemote 的 elapsed/duration/isPlaying 更新 playback（保留 songId/title/artist）
+        // Spec: 只用 MediaRemote 的 isPlaying，不取 elapsed/duration（避免与 WKWebView playback 消息冲突）
         var state = playback ?? MineradioPlaybackState(
             elapsed: 0, duration: 0, isPlaying: false,
             songId: nil, provider: "netease", title: nil, artist: nil)
-        state.elapsed = info.elapsed
-        state.duration = info.duration
         state.isPlaying = info.isPlaying
+        // Spec: 仅在 WKWebView 还没提供 elapsed 时用 MediaRemote 的兜底（首次启动场景）
+        if state.elapsed == 0 { state.elapsed = info.elapsed }
+        if state.duration == 0 { state.duration = info.duration }
         // 若 WKWebView 脚本未提供 songId，且 title 不是页面标题，则用 MediaRemote 的 title
         if state.songId == nil, let title = info.title, !title.isEmpty {
             // 过滤页面标题 "Mineradio — 在线音乐可视化播放器" 和 "本地歌曲"
             if !isNonSongTitleText(title) {
-                // Spec: 检测 MediaRemote title 变化（切歌），清除旧封面触发重新加载
                 if state.title != title {
                     NSLog("[MineradioPlayback] MediaRemote title changed: %@ → %@", state.title ?? "nil", title)
                     state.title = title
-                    if coverImage != nil {
-                        setCoverImage(nil)
-                        state.coverURL = nil
-                        lastQueriedTitle = title
-                    }
                 }
             }
         }
@@ -152,11 +151,14 @@ final class MineradioBridgeCoordinator: ObservableObject {
         }
         playback = state
 
-        updateCurrentLyric()
+        // Spec: 不在 MediaRemote 更新里驱动歌词 —— 由 WKWebView playback 消息驱动
+        // 例外：WKWebView 未展开时（webView == nil），playback 消息不会到达，
+        // 此时用 MediaRemote 的 elapsed 兜底驱动歌词（精度略低但聊胜于无）
+        if webView == nil {
+            updateCurrentLyric()
+        }
 
-        // Spec: 主动向 WKWebView 注入脚本查询封面和歌曲信息。
-        // MediaRemote 不提供 songId/coverURL，必须从 DOM 提取。每秒查询一次（节流），
-        // 直到拿到 coverURL 或 songId 为止。WKWebView 不存在时跳过（未展开过 Mineradio）。
+        // Spec: 主动向 WKWebView 注入脚本查询封面。
         queryCoverAndSongFromWebView()
     }
 
