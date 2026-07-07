@@ -275,23 +275,18 @@ enum MineradioBridgeUserScript {
   /// 这是唯一可靠的切歌信号 —— mineradio.art 会在当前歌曲后半段提前请求下一首歌的
   /// URL/lyric（预缓冲），此时 MINERADIO_API 拦截会拿到下一首 songId，但 audio.src
   /// 还没变。只有当 audio.src 真正改变时才是实际播放切换。
+  ///
+  /// Spec: trackChanged 不携带 songId —— pendingSongId 可能是预缓冲的下一首（过期），
+  /// 也可能还没准备好（null）。Swift 端收到 trackChanged 后主动查询 playQueue[currentIdx]
+  /// 获取当前歌曲的 songId/title/artist/cover，这是最可靠的数据源。
   function notifyTrackChanged(audio) {
     var newSrc = audio.src || '';
     if (newSrc === lastNotifiedSrc) return;
     lastNotifiedSrc = newSrc;
-    // Spec: 把 pendingSongId 提升为 currentSongId（实际播放了）
-    if (pendingSongId && pendingSongId !== currentSongId) {
-      currentSongId = pendingSongId;
-    }
-    var sid = currentSongId;
-    if (sid && sid !== notifiedSongId) {
-      notifiedSongId = sid;
-      // 立即发 trackChanged，Swift 端据此更新 songId/cover/lyric
-      postMsg({ type: 'trackChanged', songId: sid, provider: currentProvider });
-      // 同时发 song 消息（带 title/artist/coverURL，从 DOM 提取）
-      // 延迟 300ms 等 DOM 更新完成
-      setTimeout(function() { postSong(); }, 300);
-    }
+    // Spec: 只发切歌信号，不带 songId。Swift 端会主动查询 playQueue。
+    postMsg({ type: 'trackChanged' });
+    // 延迟 300ms 等 DOM 更新完成，发 song 消息补全 title/artist/coverURL
+    setTimeout(function() { postSong(); }, 300);
   }
 
   function scanAudios() {

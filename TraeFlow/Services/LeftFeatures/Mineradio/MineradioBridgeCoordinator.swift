@@ -66,8 +66,6 @@ final class MineradioBridgeCoordinator: ObservableObject {
     private var lastFetchedLyricSongId: String?
     /// 歌词获取中标记（避免重复请求）
     private var isFetchingLyric = false
-    /// 歌词为空的 songId 集合（避免重复请求空歌词）
-    private var emptyLyricSongIds: Set<String> = []
 
     /// Spec: 订阅 NowPlayingProvider 流式更新 —— mineradio.art 的 `<audio>` 由系统 MediaRemote
     /// 统一 hook（无需依赖 WKWebView 注入脚本），用其 elapsed/duration/isPlaying 驱动歌词 progression。
@@ -172,6 +170,131 @@ final class MineradioBridgeCoordinator: ObservableObject {
 
     /// Spec: 上次查询到的 songId，用于检测歌曲切换
     private var lastQueriedSongId: String?
+
+    /// Spec: trackChanged 信号到达后，主动查询 playQueue[currentIdx] 获取当前歌曲完整信息。
+    /// 这是切歌时获取 songId 的最可靠方式 —— playQueue 在 audio.src 变化时已推进到新歌。
+    /// 查询结果用于：更新 songId/title/artist/cover、触发歌词获取、加载封面。
+    private func queryCurrentTrackFromWebView() {
+        guard let webView = webView else {
+            NSLog("[MineradioPlayback] queryCurrentTrack: webView nil, retry in 500ms")
+            // WKWebView 未就绪，延迟重试
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.queryCurrentTrackFromWebView()
+            }
+            return
+        }
+
+        let trackScript = """
+        (function() {
+            var result = { songId: null, title: null, artist: null, provider: null, coverURL: null, coverType: 'none', debug: '' };
+            var queueNames = ['playQueue','playlist','playList','queue','songs','list','trackList','currentList','playerQueue','playingList','songList'];
+            var idxNames = ['currentIdx','currentIndex','curIndex','idx','index','playingIdx','playIndex','currentSongIdx','songIndex'];
+            try {
+                for (var qi = 0; qi < queueNames.length; qi++) {
+                    var q = window[queueNames[qi]];
+                    if (!q || !Array.isArray(q) || q.length === 0) continue;
+                    for (var ii = 0; ii < idxNames.length; ii++) {
+                        var idx = window[idxNames[ii]];
+                        if (typeof idx !== 'number' || idx < 0 || idx >= q.length) continue;
+                        var s = q[idx];
+                        if (s && typeof s === 'object') {
+                            result.debug = 'queue=' + queueNames[qi] + ' idx=' + idxNames[ii] + ' keys=' + Object.keys(s).slice(0,15).join(',');
+                            if (s.id) { result.songId = String(s.id); }
+                            if (s.name) { result.title = s.name; }
+                            else if (s.title) { result.title = s.title; }
+                            if (s.artist) { result.artist = s.artist; }
+                            else if (s.artists) {
+                                // artists 可能是字符串或对象数组
+                                if (typeof s.artists === 'string') { result.artist = s.artists; }
+                                else if (Array.isArray(s.artists) && s.artists.length > 0) {
+                                    var first = s.artists[0];
+                                    result.artist = typeof first === 'string' ? first : (first.name || '');
+                                }
+                            }
+                            if (s.provider) { result.provider = s.provider; }
+                            else if (s.source) { result.provider = s.source; }
+                            var cover = s.cover || s.picUrl || s.albumimg || s.pic || s.albumPic || s.coverUrl || s.cover_url || s.imgurl || s.img || s.artwork || s.thumbnail || '';
+                            if (cover && cover.indexOf('http') === 0) {
+                                result.coverURL = cover;
+                                result.coverType = 'http';
+                            } else if (cover && cover.indexOf('data:image/') === 0) {
+                                result.coverURL = cover;
+                                result.coverType = 'data';
+                            }
+                            break;
+                        }
+                    }
+                    if (result.songId) break;
+                }
+            } catch (e) { result.debug = 'error: ' + (e && e.message || e); }
+            return JSON.stringify(result);
+        })();
+        """
+
+        webView.evaluateJavaScript(trackScript) { [weak self] result, error in
+            guard let self = self, let jsonString = result as? String else {
+                if let error = error {
+                    NSLog("[MineradioPlayback] queryCurrentTrack JS error: %@", error.localizedDescription)
+                }
+                return
+            }
+            guard let data = jsonString.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+                NSLog("[MineradioPlayback] queryCurrentTrack parse failed: %@", String(jsonString.prefix(200)))
+                return
+            }
+
+            let songId = dict["songId"]
+            let title = dict["title"]
+            let artist = dict["artist"]
+            let provider = dict["provider"]
+            let coverURL = dict["coverURL"]
+            let coverType = dict["coverType"] ?? "none"
+            let debug = dict["debug"] ?? ""
+
+            NSLog("[MineradioPlayback] queryCurrentTrack: songId=%@ title=%@ provider=%@ coverType=%@ debug=%@",
+                  songId ?? "nil", title ?? "nil", provider ?? "nil", coverType, String(debug.prefix(200)))
+
+            guard let songId = songId, !songId.isEmpty else {
+                NSLog("[MineradioPlayback] queryCurrentTrack: no songId, retry in 500ms")
+                // playQueue 可能还没更新，延迟重试
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.queryCurrentTrackFromWebView()
+                }
+                return
+            }
+
+            // 更新 playback 状态
+            var state = self.playback ?? MineradioPlaybackState(
+                elapsed: 0, duration: 0, isPlaying: false,
+                songId: nil, provider: provider ?? "netease", title: nil, artist: nil, coverURL: nil)
+            state.songId = songId
+            if let provider = provider, !provider.isEmpty { state.provider = provider }
+            if let title = title, !title.isEmpty, !self.isNonSongTitleText(title) { state.title = title }
+            if let artist = artist, !artist.isEmpty { state.artist = artist }
+
+            // 触发歌词获取（仅当 songId 变化）
+            if songId != self.lastFetchedLyricSongId {
+                self.fetchLyric(for: songId)
+            }
+
+            // 加载封面
+            if self.coverImage == nil && coverType != "none" && coverType != "blob" {
+                if coverType == "data" {
+                    self.fetchCoverDataFromWebView(webView)
+                } else if coverType == "http" {
+                    if let url = coverURL {
+                        if let normalized = self.normalizeCoverURL(url, provider: state.provider) {
+                            self.loadCoverImage(from: normalized, provider: state.provider)
+                        }
+                    }
+                }
+            }
+
+            self.playback = state
+            self.updateCurrentLyric()
+        }
+    }
 
     private func queryCoverAndSongFromWebView() {
         // 节流：1 秒内不重复查询
@@ -544,38 +667,23 @@ final class MineradioBridgeCoordinator: ObservableObject {
         }
 
         if type == "trackChanged" {
-            let songId = body["songId"] as? String
-            let provider = body["provider"] as? String
-
-            NSLog("[MineradioPlayback] trackChanged: songId=%@ provider=%@", songId ?? "nil", provider ?? "nil")
-
-            guard let songId = songId, !songId.isEmpty else { return }
-
-            // Spec: 实际切歌 —— 更新 songId/provider，清除旧封面和歌词，触发新歌词获取
-            var state = playback ?? MineradioPlaybackState(
-                elapsed: 0, duration: 0, isPlaying: false,
-                songId: nil, provider: provider ?? "netease", title: nil, artist: nil, coverURL: nil)
-            state.songId = songId
-            if let provider = provider { state.provider = provider }
+            // Spec: trackChanged 不携带 songId —— pendingSongId 可能是预缓冲的过期值，
+            // 也可能还没准备好。收到信号后主动查询 playQueue[currentIdx] 获取当前歌曲完整信息。
+            NSLog("[MineradioPlayback] trackChanged signal received")
 
             // 清除旧封面和歌词（切歌瞬间）
             setCoverImage(nil)
-            state.coverURL = nil
             lyricLines = []
             currentLyric = nil
             currentLyricProgress = 0
-
-            playback = state
-
-            // 触发新歌词获取
-            fetchLyric(for: songId)
-
-            // 立即查询 DOM 获取新封面（不等 song 消息的 300ms 延迟）
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                guard let self = self else { return }
-                self.lastWebViewQueryTime = .distantPast
-                self.queryCoverAndSongFromWebView()
+            if var state = playback {
+                state.coverURL = nil
+                state.songId = nil // 清空 songId，等查询结果
+                playback = state
             }
+
+            // 立即查询 playQueue 获取当前歌曲信息
+            queryCurrentTrackFromWebView()
         } else if type == "song" {
             let songId = body["songId"] as? String
             let title = body["title"] as? String
@@ -585,7 +693,7 @@ final class MineradioBridgeCoordinator: ObservableObject {
 
             NSLog("[MineradioPlayback] song msg: songId=%@ title=%@ provider=%@ cover=%@", songId ?? "nil", title ?? "nil", provider ?? "nil", coverURL ?? "nil")
 
-            // Spec: song 消息只补全 title/artist/coverURL，不更新 songId（songId 由 trackChanged 负责）
+            // Spec: song 消息只补全 title/artist/coverURL，不更新 songId（songId 由 trackChanged 触发查询）
             // 且只在 songId 与当前 playback.songId 匹配时才更新（避免预缓冲的过期 song 消息污染）
             var state = playback ?? MineradioPlaybackState(
                 elapsed: 0, duration: 0, isPlaying: false,
@@ -784,14 +892,8 @@ final class MineradioBridgeCoordinator: ObservableObject {
             return
         }
         guard !isFetchingLyric else { return }
-        // 已知该歌曲无歌词，跳过
-        if emptyLyricSongIds.contains(songId) {
-            lastFetchedLyricSongId = songId
-            lyricLines = []
-            currentLyric = nil
-            currentLyricProgress = 0
-            return
-        }
+        // Spec: 不缓存空歌词 songId —— 之前缓存会导致后续切到同一首歌时不重新请求，
+        // 若首次失败是网络问题，后续永远拿不到歌词。每次切歌都重新请求。
 
         // Spec: 立即清空旧歌词，避免异步请求期间旧歌词被新 elapsed 错误匹配
         lyricLines = []
@@ -845,7 +947,6 @@ final class MineradioBridgeCoordinator: ObservableObject {
 
         if raw.isEmpty {
             NSLog("[MineradioBridge] lyric empty for song %@", songId)
-            emptyLyricSongIds.insert(songId)
             lyricLines = []
             currentLyric = nil
             currentLyricProgress = 0
