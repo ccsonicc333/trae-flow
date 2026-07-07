@@ -3,11 +3,16 @@ import SwiftUI
 /// Spec: mineradio-bridge-compat-layer — Mineradio 功能紧凑态视图。
 ///
 /// 显示优先级：
-/// 1. 当前歌词行（`coordinator.currentLyric?.text`，非空时显示）
-/// 2. 空白（无歌词时不显示任何文本，不回退到歌曲标题或静态文本）
+/// 1. 当前歌词行（`coordinator.currentLyric?.text`，非空时显示，karaoke 高亮）
+/// 2. 歌曲标题（`coordinator.playback?.title`，过滤后非空时显示，opacity 渐变）
+/// 3. 空白（无歌词且无标题时不显示任何文本）
+///
+/// 与 Mineradio 网页歌词页面行为对齐 —— 当网页歌词页面显示歌名（无歌词/纯音乐/未匹配）
+/// 时，Flow 岛紧凑态也显示歌名，保持两边视觉一致。
 ///
 /// 歌词渲染：karaoke 高亮 —— 整行文本用暗色绘制，叠加一层亮色文本用 `mask`
 /// 按 `currentLyricProgress` 从左到右渐变填充，模拟 Mineradio 网页的逐字进度效果。
+/// 标题渲染：普通亮色文本，无 karaoke 高亮（标题无逐字进度）。
 ///
 /// 左侧图标显示优先级：
 /// 1. 当前歌曲专辑封面（`coordinator.coverImage`）
@@ -19,12 +24,37 @@ struct MineradioCompactView: View {
     @ObservedObject private var coordinator = MineradioBridgeCoordinator.shared
     private let feature = LeftFeatureStore.shared.features.first { $0.id == LeftFeature.mineradioID }
 
-    /// 当前紧凑态应显示的文本（无歌词时返回 nil，不回退到标题或静态文本）
+    /// 当前紧凑态应显示的文本
+    /// - 优先返回歌词（karaoke 高亮渲染）
+    /// - 无歌词时回退到歌曲标题（普通亮色渲染，无 karaoke）
+    /// - 都没有时返回 nil（不显示文本）
     private var displayText: String? {
         if let lyric = coordinator.currentLyric?.text, !lyric.isEmpty {
             return lyric
         }
+        if let title = coordinator.playback?.title, isLikelySongTitle(title) {
+            return title
+        }
         return nil
+    }
+
+    /// 显示的是否为歌词（用于决定是否使用 karaoke 高亮渲染）
+    private var isDisplayingLyric: Bool {
+        guard let lyric = coordinator.currentLyric?.text, !lyric.isEmpty else { return false }
+        return true
+    }
+
+    /// Spec: 与 MineradioBridgeUserScript.isLikelySongTitle 对齐的标题过滤
+    /// 排除页面标题、空字符串、过长的非歌曲文本
+    private func isLikelySongTitle(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 200 else { return false }
+        let lower = trimmed.lowercased()
+        if lower.contains("mineradio") { return false }
+        if trimmed.contains("播放器") { return false }
+        if trimmed.contains("在线音乐") { return false }
+        if trimmed.contains("本地歌曲") { return false }
+        return true
     }
 
     var body: some View {
@@ -52,8 +82,18 @@ struct MineradioCompactView: View {
             }
 
             if let text = displayText {
-                // Spec: karaoke 高亮歌词 —— 暗色底 + 亮色高亮层用 mask 按 progress 渐变填充
-                karaokeLyricText(text)
+                if isDisplayingLyric {
+                    // Spec: karaoke 高亮歌词 —— 暗色底 + 亮色高亮层用 mask 按 progress 渐变填充
+                    karaokeLyricText(text)
+                } else {
+                    // Spec: 歌曲标题回退 —— 普通亮色文本，无 karaoke 高亮
+                    Text(text)
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundColor(.white.opacity(0.92))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .transition(.opacity)
+                }
             }
         }
         .accessibilityLabel(accessibilityLabel)
@@ -101,6 +141,9 @@ struct MineradioCompactView: View {
     private var accessibilityLabel: String {
         if let lyric = coordinator.currentLyric?.text, !lyric.isEmpty {
             return "Mineradio 歌词：\(lyric)"
+        }
+        if let title = coordinator.playback?.title, isLikelySongTitle(title) {
+            return "Mineradio 歌曲：\(title)"
         }
         return "Mineradio 矿石电台"
     }

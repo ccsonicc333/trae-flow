@@ -283,6 +283,10 @@ enum MineradioBridgeUserScript {
     var newSrc = audio.src || '';
     if (newSrc === lastNotifiedSrc) return;
     lastNotifiedSrc = newSrc;
+    // Spec: 重置 postPlayback 节流，确保新歌首个 play/loadedmetadata 事件能立刻上报。
+    // 不重置的话，前一首最后一个 timeupdate/ended 事件刚触发过 200ms 节流，新歌首个
+    // 播放事件会被丢弃，Swift 端拿不到新的 elapsed/duration，UI 卡在 0 秒。
+    lastPostedPlayback = 0;
     // Spec: 只发切歌信号，不带 songId。Swift 端会主动查询 playQueue。
     postMsg({ type: 'trackChanged' });
     // 延迟 300ms 等 DOM 更新完成，发 song 消息补全 title/artist/coverURL
