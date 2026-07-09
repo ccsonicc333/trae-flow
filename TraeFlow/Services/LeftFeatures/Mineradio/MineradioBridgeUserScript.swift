@@ -17,7 +17,7 @@ enum MineradioBridgeUserScript {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     /// Bridge 版本标识
-    static let bridgeVersion = "trae-flow-1.0"
+    static let bridgeVersion = "1.3.1"
 
     /// API 消息处理器名（普通 API 请求）
     static let apiMessageHandlerName = "mineradioApi"
@@ -41,19 +41,63 @@ enum MineradioBridgeUserScript {
     /// 脚本源码
     static let scriptSource: String = #"""
 (function () {
-  var BRIDGE_VERSION = 'trae-flow-1.0';
   var EXT_ID = 'trae-flow';
   var BRIDGE_SOURCE = 'mineradio-extension-bridge';
   var PAGE_SOURCE = 'mineradio-web-page';
+  // Spec: 固定 fallback 版本 —— 当无法读取网页内置的期望版本时使用
+  var FALLBACK_BRIDGE_VERSION = '1.3.1';
+
+  // Spec: 动态获取 Bridge 版本，使其始终与网页端检测的"最新版本"一致，
+  // 避免 mineradio.art 反复弹出"Bridge 扩展可更新"提示。
+  // 网页通常把期望版本暴露在全局变量（如 __mineradioLatestBridgeVersion / BRIDGE_LATEST_VERSION
+  // / latestBridgeVersion / appVersion 等）。我们扫描这些变量，若找到合法 semver 就返回它；
+  // 否则 fallback 到固定版本。
+  function getAdaptiveBridgeVersion() {
+    var candidates = [
+      '__mineradioLatestBridgeVersion',
+      '__mineradio_bridge_latest_version',
+      'BRIDGE_LATEST_VERSION',
+      'LATEST_BRIDGE_VERSION',
+      'latestBridgeVersion',
+      'bridgeLatestVersion',
+      'MINERADIO_BRIDGE_VERSION',
+      'APP_BRIDGE_VERSION',
+      'appBridgeVersion',
+      '__APP_VERSION__',
+      'APP_VERSION',
+      'appVersion'
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      try {
+        var v = window[candidates[i]];
+        if (v && typeof v === 'string') {
+          var trimmed = v.trim();
+          // 简单 semver 校验：允许 1.2.3、v1.2.3、1.2.3-beta 等
+          if (/^v?\d+(\.\d+){0,2}[\w\-\.]*$/.test(trimmed)) {
+            // 去掉前缀 v，保持和 READY/PONG 里原先不带 v 的格式一致
+            return trimmed.replace(/^v/, '');
+          }
+        }
+      } catch (_) {}
+    }
+    return FALLBACK_BRIDGE_VERSION;
+  }
 
   function postToPage(payload, transfer) {
     var msg = Object.assign({ source: BRIDGE_SOURCE }, payload);
     window.postMessage(msg, '*', transfer || []);
   }
 
+  // Spec: 发送 Bridge 就绪/心跳消息时使用动态版本，确保和网页端"检测版本"始终一致。
+  // 使用函数而非缓存变量，因为网页的期望版本变量可能在脚本注入后才设置。
+  function postBridgeMessage(payload, transfer) {
+    var version = getAdaptiveBridgeVersion();
+    postToPage(Object.assign({ version: version }, payload), transfer);
+  }
+
   if (window.__mineradioBridgeInjected) {
-    postToPage({ type: 'MINERADIO_BRIDGE_READY', version: BRIDGE_VERSION, extId: EXT_ID });
-    postToPage({ type: 'MINERADIO_BRIDGE_PONG', ready: true, version: BRIDGE_VERSION, extId: EXT_ID });
+    postBridgeMessage({ type: 'MINERADIO_BRIDGE_READY', extId: EXT_ID });
+    postBridgeMessage({ type: 'MINERADIO_BRIDGE_PONG', ready: true, extId: EXT_ID });
     return;
   }
   window.__mineradioBridgeInjected = true;
@@ -73,7 +117,7 @@ enum MineradioBridgeUserScript {
     if (!data || data.source !== PAGE_SOURCE) return;
 
     if (data.type === 'MINERADIO_BRIDGE_PING' || data.type === 'MINERADIO_BRIDGE_PROBE') {
-      postToPage({ type: 'MINERADIO_BRIDGE_PONG', ready: true, version: BRIDGE_VERSION, extId: EXT_ID });
+      postBridgeMessage({ type: 'MINERADIO_BRIDGE_PONG', ready: true, extId: EXT_ID });
       return;
     }
 
@@ -122,7 +166,7 @@ enum MineradioBridgeUserScript {
   };
 
   // 主动通知网页 Bridge 已就绪
-  postToPage({ type: 'MINERADIO_BRIDGE_READY', version: BRIDGE_VERSION, extId: EXT_ID });
+  postBridgeMessage({ type: 'MINERADIO_BRIDGE_READY', extId: EXT_ID });
 })();
 """#
 
@@ -174,6 +218,15 @@ enum MineradioBridgeUserScript {
     });
   }
 
+  /// Spec: 强制上报播放状态，绕过节流。用于 loadedmetadata 等关键事件 ——
+  /// trackChanged 后 attachAudio 的 postPlayback 先执行设置节流，loadedmetadata
+  /// 在 200ms 内触发会被丢弃，Swift 拿不到真实 duration，UI 卡在 0 秒。
+  function postPlaybackForce(audio) {
+    if (!audio) return;
+    lastPostedPlayback = 0;
+    postPlayback(audio);
+  }
+
   // 判断文本是否疑似歌曲标题（排除页面标题 "Mineradio — 在线音乐可视化播放器"、"本地歌曲" 等）
   function isLikelySongTitle(text) {
     if (!text) return false;
@@ -192,27 +245,45 @@ enum MineradioBridgeUserScript {
     lastPostedSongId = currentSongId;
     var title = null, artist = null, coverURL = null;
     try {
-      // best-effort: 从播放器 DOM 提取标题/艺术家（过滤页面标题）
-      var titleCandidates = [
-        '[class*="now-playing"] [class*="title"]',
-        '[class*="song-title"]', '[class*="track-title"]',
-        '[class*="song-name"]', '[class*="track-name"]',
-        '[data-song-title]', '[data-song-name]'
-      ];
-      for (var i = 0; i < titleCandidates.length; i++) {
-        var el = document.querySelector(titleCandidates[i]);
-        if (el) {
-          var t = el.textContent.trim();
-          if (t && isLikelySongTitle(t)) { title = t; break; }
+      // Spec: 优先从底部播放控制栏的明确 ID 提取当前歌曲标题/艺术家。
+      // mineradio.art 的播放控制栏有 #control-title / #control-artist，这是最可靠的当前歌曲信息。
+      // 只有在明确 ID 不存在时才回退到 class 选择器（class 选择器容易匹配到播放列表/推荐列表里的其他歌曲）。
+      var controlTitle = document.getElementById('control-title');
+      if (controlTitle) {
+        var ct = controlTitle.textContent.trim();
+        if (ct && isLikelySongTitle(ct)) { title = ct; }
+      }
+      var controlArtist = document.getElementById('control-artist');
+      if (controlArtist) {
+        var ca = controlArtist.textContent.trim();
+        if (ca) { artist = ca; }
+      }
+
+      // 回退：class 选择器（仅在无明确 ID 时使用）
+      if (!title) {
+        var titleCandidates = [
+          '[class*="now-playing"] [class*="title"]',
+          '[class*="song-title"]', '[class*="track-title"]',
+          '[class*="song-name"]', '[class*="track-name"]',
+          '[data-song-title]', '[data-song-name]'
+        ];
+        for (var i = 0; i < titleCandidates.length; i++) {
+          var el = document.querySelector(titleCandidates[i]);
+          if (el) {
+            var t = el.textContent.trim();
+            if (t && isLikelySongTitle(t)) { title = t; break; }
+          }
         }
       }
-      var artistCandidates = [
-        '[class*="now-playing"] [class*="artist"]',
-        '[class*="song-artist"]', '[class*="track-artist"]'
-      ];
-      for (var j = 0; j < artistCandidates.length; j++) {
-        var aEl = document.querySelector(artistCandidates[j]);
-        if (aEl && aEl.textContent.trim()) { artist = aEl.textContent.trim(); break; }
+      if (!artist) {
+        var artistCandidates = [
+          '[class*="now-playing"] [class*="artist"]',
+          '[class*="song-artist"]', '[class*="track-artist"]'
+        ];
+        for (var j = 0; j < artistCandidates.length; j++) {
+          var aEl = document.querySelector(artistCandidates[j]);
+          if (aEl && aEl.textContent.trim()) { artist = aEl.textContent.trim(); break; }
+        }
       }
       // best-effort: 提取专辑封面 URL
       // mineradio.art 的 DOM 结构：
@@ -264,10 +335,14 @@ enum MineradioBridgeUserScript {
   function attachAudio(audio) {
     if (!audio || audio.__mineradioHooked) return;
     audio.__mineradioHooked = true;
-    var events = ['timeupdate', 'play', 'pause', 'loadedmetadata', 'ended'];
+    // Spec: loadedmetadata 用 postPlaybackForce 绕过节流 —— trackChanged 后
+    // attachAudio 的 postPlayback 先执行设置节流，loadedmetadata 在 200ms 内
+    // 触发会被丢弃，Swift 拿不到真实 duration，UI 卡在 0 秒。
+    var events = ['timeupdate', 'play', 'pause', 'ended'];
     for (var i = 0; i < events.length; i++) {
       audio.addEventListener(events[i], function () { postPlayback(audio); });
     }
+    audio.addEventListener('loadedmetadata', function () { postPlaybackForce(audio); });
     postPlayback(audio);
   }
 
@@ -276,9 +351,11 @@ enum MineradioBridgeUserScript {
   /// URL/lyric（预缓冲），此时 MINERADIO_API 拦截会拿到下一首 songId，但 audio.src
   /// 还没变。只有当 audio.src 真正改变时才是实际播放切换。
   ///
-  /// Spec: trackChanged 不携带 songId —— pendingSongId 可能是预缓冲的下一首（过期），
-  /// 也可能还没准备好（null）。Swift 端收到 trackChanged 后主动查询 playQueue[currentIdx]
-  /// 获取当前歌曲的 songId/title/artist/cover，这是最可靠的数据源。
+  /// Spec: trackChanged 携带 pendingSongId 作为"最佳猜测" —— audio.src 变化时
+  /// pendingSongId 大概率就是当前歌曲（因为 Mineradio 预缓冲的就是下一首）。
+  /// Swift 端收到后立即用此 songId 获取歌词，不等 queryCurrentTrackFromWebView 的
+  /// 异步结果。queryCurrentTrackFromWebView 仍会执行以补全 title/artist/cover 并
+  /// 确认/修正 songId。
   function notifyTrackChanged(audio) {
     var newSrc = audio.src || '';
     if (newSrc === lastNotifiedSrc) return;
@@ -287,8 +364,16 @@ enum MineradioBridgeUserScript {
     // 不重置的话，前一首最后一个 timeupdate/ended 事件刚触发过 200ms 节流，新歌首个
     // 播放事件会被丢弃，Swift 端拿不到新的 elapsed/duration，UI 卡在 0 秒。
     lastPostedPlayback = 0;
-    // Spec: 只发切歌信号，不带 songId。Swift 端会主动查询 playQueue。
-    postMsg({ type: 'trackChanged' });
+    // Spec: 将 pendingSongId 提升为 currentSongId —— audio.src 变化说明实际切歌，
+    // 此时 pendingSongId（由 MINERADIO_API 预缓冲拦截缓存）大概率就是当前歌曲 ID。
+    // 这让 postSong() 和后续 postPlayback() 都能携带正确的 songId。
+    if (pendingSongId) {
+      currentSongId = pendingSongId;
+      // 重置 lastPostedSongId 让 postSong() 重新发 song 消息
+      lastPostedSongId = null;
+    }
+    // Spec: 携带 songId 和 provider，让 Swift 端立即获取歌词，不等异步查询
+    postMsg({ type: 'trackChanged', songId: currentSongId, provider: currentProvider });
     // 延迟 300ms 等 DOM 更新完成，发 song 消息补全 title/artist/coverURL
     setTimeout(function() { postSong(); }, 300);
   }

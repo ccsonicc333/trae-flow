@@ -74,6 +74,11 @@ final class MineradioBridgeCoordinator: ObservableObject {
     /// 标记当前 NowPlaying 是否来自 Mineradio（title 含 "Mineradio" 或 source 是本 app）
     private var isMineradioPlaying = false
 
+    /// Spec: 上次收到 WKWebView playback 消息的时间。用于检测播放状态陈旧 ——
+    /// WebView 收起后 JS 事件可能暂停（WKWebView 不在视图层级时 timer 被节流），
+    /// 此时用 MediaRemote 的 elapsed/duration 作为回退，避免 UI 卡在旧值。
+    private var lastPlaybackMessageTime: Date = .distantPast
+
     // MARK: - Init
 
     private nonisolated init() {
@@ -100,10 +105,11 @@ final class MineradioBridgeCoordinator: ObservableObject {
     /// Mineradio 在 WKWebView 内播放 `<audio>`，系统 MediaRemote 会把 TRAE FLOW app 作为 source，
     /// title 通常是网页 `<title>`（"Mineradio — 在线音乐可视化播放器"）。
     ///
-    /// Spec: MediaRemote 仅用于检测"是否有 Mineradio 在播放"（isPlaying）和补全 title/artist，
-    /// **不取其 elapsed/duration** —— MediaRemote 是异步轮询系统播放器，切歌瞬间可能还报告
-    /// 旧 elapsed，用旧 elapsed 在新歌词数组里查找会显示错误的歌词行。
-    /// elapsed/duration 只由 WKWebView `playback` 消息提供（直接来自 audio.currentTime，最准确）。
+    /// Spec: MediaRemote 用于检测"是否有 Mineradio 在播放"（isPlaying）和补全 title/artist。
+    /// elapsed/duration 优先用 WKWebView `playback` 消息（最准确），但当 WKWebView 不在视图层级
+    /// （Flow 岛收起）时 JS 事件可能暂停，playback 消息停止到达。此时用 MediaRemote 的
+    /// elapsed/duration 作为回退，避免 UI 卡在旧值/0 秒。
+    /// 切歌瞬间（trackChanged 后 3 秒内）仍只用 WKWebView 的值，避免 MediaRemote 旧 elapsed 干扰。
     private func handleNowPlayingUpdate(_ info: NowPlayingInfo?) {
         guard let info = info else {
             // 播放停止：若之前是 Mineradio 在播，清空状态
@@ -126,14 +132,29 @@ final class MineradioBridgeCoordinator: ObservableObject {
 
         isMineradioPlaying = info.isPlaying
 
-        // Spec: 只用 MediaRemote 的 isPlaying，不取 elapsed/duration（避免与 WKWebView playback 消息冲突）
         var state = playback ?? MineradioPlaybackState(
             elapsed: 0, duration: 0, isPlaying: false,
             songId: nil, provider: "netease", title: nil, artist: nil)
         state.isPlaying = info.isPlaying
-        // Spec: 仅在 WKWebView 还没提供 elapsed 时用 MediaRemote 的兜底（首次启动场景）
-        if state.elapsed == 0 { state.elapsed = info.elapsed }
-        if state.duration == 0 { state.duration = info.duration }
+
+        // Spec: 播放状态陈旧检测 —— WKWebView 不在视图层级时 JS 事件暂停，
+        // playback 消息停止到达。超过 3 秒无消息时用 MediaRemote 的 elapsed/duration 回退。
+        let playbackStale = Date().timeIntervalSince(lastPlaybackMessageTime) > 3.0
+        if playbackStale {
+            // Spec: 陈旧回退 —— 用 MediaRemote 的 elapsed/duration
+            // 仅当 MediaRemote 的值比当前 state 的值更"新"时才更新
+            if info.elapsed > state.elapsed || state.duration == 0 {
+                state.elapsed = info.elapsed
+            }
+            if info.duration > 0 && (state.duration == 0 || abs(info.duration - state.duration) > 1) {
+                state.duration = info.duration
+            }
+        } else {
+            // Spec: WKWebView playback 消息活跃 —— 仅在 state 为 0 时用 MediaRemote 兜底（首次启动）
+            if state.elapsed == 0 { state.elapsed = info.elapsed }
+            if state.duration == 0 { state.duration = info.duration }
+        }
+
         // 若 WKWebView 脚本未提供 songId，且 title 不是页面标题，则用 MediaRemote 的 title
         if state.songId == nil, let title = info.title, !title.isEmpty {
             // 过滤页面标题 "Mineradio — 在线音乐可视化播放器" 和 "本地歌曲"
@@ -150,9 +171,9 @@ final class MineradioBridgeCoordinator: ObservableObject {
         playback = state
 
         // Spec: 不在 MediaRemote 更新里驱动歌词 —— 由 WKWebView playback 消息驱动
-        // 例外：WKWebView 未展开时（webView == nil），playback 消息不会到达，
-        // 此时用 MediaRemote 的 elapsed 兜底驱动歌词（精度略低但聊胜于无）
-        if webView == nil {
+        // 例外 1：WKWebView 未展开时（webView == nil），playback 消息不会到达
+        // 例外 2：playback 消息陈旧（>3s），用 MediaRemote 的 elapsed 兜底驱动歌词
+        if webView == nil || playbackStale {
             updateCurrentLyric()
         }
 
@@ -170,6 +191,9 @@ final class MineradioBridgeCoordinator: ObservableObject {
 
     /// Spec: 上次查询到的 songId，用于检测歌曲切换
     private var lastQueriedSongId: String?
+    /// Spec: queryCurrentTrackFromWebView 的代数计数器，防止旧回调覆盖新状态。
+    /// 每次 trackChanged 发起新查询时递增；回调返回时若 generation 已过期则丢弃结果。
+    private var trackQueryGeneration: UInt64 = 0
 
     /// Spec: trackChanged 信号到达后，主动查询 playQueue[currentIdx] 获取当前歌曲完整信息。
     /// 这是切歌时获取 songId 的最可靠方式 —— playQueue 在 audio.src 变化时已推进到新歌。
@@ -184,10 +208,18 @@ final class MineradioBridgeCoordinator: ObservableObject {
             return
         }
 
+        // Spec: 每次发起新查询时递增 generation，防止旧查询回调覆盖新状态。
+        // 典型场景：切歌后旧查询刚好返回，若不用 generation 过滤会把上一首歌的 title 写回来。
+        trackQueryGeneration += 1
+        let currentGeneration = trackQueryGeneration
+
+        // Spec: 只查询 mineradio.art 明确的 playQueue + currentIdx。
+        // 之前扫描过多通用变量名（list/songs/queue 等）导致误匹配页面里的推荐/搜索/导航数组，
+        // 取到错误的 songId/title。mineradio 的播放队列就是 window.playQueue，用明确名称即可。
         let trackScript = """
         (function() {
             var result = { songId: null, title: null, artist: null, provider: null, coverURL: null, coverType: 'none', debug: '' };
-            var queueNames = ['playQueue','playlist','playList','queue','songs','list','trackList','currentList','playerQueue','playingList','songList'];
+            var queueNames = ['playQueue'];
             var idxNames = ['currentIdx','currentIndex','curIndex','idx','index','playingIdx','playIndex','currentSongIdx','songIndex'];
             try {
                 for (var qi = 0; qi < queueNames.length; qi++) {
@@ -199,12 +231,11 @@ final class MineradioBridgeCoordinator: ObservableObject {
                         var s = q[idx];
                         if (s && typeof s === 'object') {
                             result.debug = 'queue=' + queueNames[qi] + ' idx=' + idxNames[ii] + ' keys=' + Object.keys(s).slice(0,15).join(',');
-                            if (s.id) { result.songId = String(s.id); }
+                            if (s.id != null) { result.songId = String(s.id); }
                             if (s.name) { result.title = s.name; }
                             else if (s.title) { result.title = s.title; }
                             if (s.artist) { result.artist = s.artist; }
                             else if (s.artists) {
-                                // artists 可能是字符串或对象数组
                                 if (typeof s.artists === 'string') { result.artist = s.artists; }
                                 else if (Array.isArray(s.artists) && s.artists.length > 0) {
                                     var first = s.artists[0];
@@ -255,6 +286,13 @@ final class MineradioBridgeCoordinator: ObservableObject {
             NSLog("[MineradioPlayback] queryCurrentTrack: songId=%@ title=%@ provider=%@ coverType=%@ debug=%@",
                   songId ?? "nil", title ?? "nil", provider ?? "nil", coverType, String(debug.prefix(200)))
 
+            // Spec: 丢弃过期查询回调 —— trackChanged 后可能已有新查询，旧回调返回的是上一首歌数据。
+            if currentGeneration != self.trackQueryGeneration {
+                NSLog("[MineradioPlayback] queryCurrentTrack: generation %llu expired (current %llu), dropping",
+                      currentGeneration, self.trackQueryGeneration)
+                return
+            }
+
             guard let songId = songId, !songId.isEmpty else {
                 NSLog("[MineradioPlayback] queryCurrentTrack: no songId, retry in 500ms")
                 // playQueue 可能还没更新，延迟重试
@@ -264,14 +302,26 @@ final class MineradioBridgeCoordinator: ObservableObject {
                 return
             }
 
+            // Spec: 如果当前 playback 已经有 songId，必须和查询结果一致才接受 title/artist。
+            // 防止 playQueue 提前推进到下一首（Mineradio 预缓冲）或误匹配导致错误 title 覆盖。
+            let currentSongId = self.playback?.songId
+            if let currentSongId = currentSongId, !currentSongId.isEmpty, currentSongId != songId {
+                NSLog("[MineradioPlayback] queryCurrentTrack: songId mismatch (current %@, got %@), drop title update",
+                      currentSongId, songId)
+                // 仅当需要时加载封面（封面通常和 songId 绑定，不一致也不加载）
+                return
+            }
+
             // 更新 playback 状态
+            // Spec: queryCurrentTrackFromWebView 只更新 songId/provider/cover，不更新 title/artist。
+            // title/artist 由 postSong() 从底部播放控制栏的 #control-title/#control-artist 提取，
+            // 更准确地反映"当前正在播放"的歌曲。playQueue 可能预缓冲下一首，或 audio.src
+            // 变化后 DOM 还没更新，用 playQueue 的 title 容易出错。
             var state = self.playback ?? MineradioPlaybackState(
                 elapsed: 0, duration: 0, isPlaying: false,
                 songId: nil, provider: provider ?? "netease", title: nil, artist: nil, coverURL: nil)
             state.songId = songId
             if let provider = provider, !provider.isEmpty { state.provider = provider }
-            if let title = title, !title.isEmpty, !self.isNonSongTitleText(title) { state.title = title }
-            if let artist = artist, !artist.isEmpty { state.artist = artist }
 
             // 触发歌词获取（仅当 songId 变化）
             if songId != self.lastFetchedLyricSongId {
@@ -667,22 +717,49 @@ final class MineradioBridgeCoordinator: ObservableObject {
         }
 
         if type == "trackChanged" {
-            // Spec: trackChanged 不携带 songId —— pendingSongId 可能是预缓冲的过期值，
-            // 也可能还没准备好。收到信号后主动查询 playQueue[currentIdx] 获取当前歌曲完整信息。
-            NSLog("[MineradioPlayback] trackChanged signal received")
+            // Spec: trackChanged 携带 pendingSongId 作为"最佳猜测" —— audio.src 变化时
+            // pendingSongId 大概率就是当前歌曲 ID（Mineradio 预缓冲的就是下一首）。
+            // 立即用此 songId 获取歌词，不等 queryCurrentTrackFromWebView 的异步结果。
+            let trackSongId = body["songId"] as? String
+            let trackProvider = body["provider"] as? String
+            NSLog("[MineradioPlayback] trackChanged signal received, songId=%@ provider=%@",
+                  trackSongId ?? "nil", trackProvider ?? "nil")
 
             // 清除旧封面和歌词（切歌瞬间）
             setCoverImage(nil)
             lyricLines = []
             currentLyric = nil
             currentLyricProgress = 0
-            if var state = playback {
-                state.coverURL = nil
-                state.songId = nil // 清空 songId，等查询结果
+
+            // Spec: 清空 title/artist/coverURL —— 切歌时旧歌的标题残留会让 compact view
+            // 在新歌无歌词时回退显示旧歌标题（"不知道哪里来的歌名"）。新标题由 song 消息
+            // （postSong 300ms 后发送）或 queryCurrentTrackFromWebView 异步补全。
+            var state = playback ?? MineradioPlaybackState(
+                elapsed: 0, duration: 0, isPlaying: false,
+                songId: nil, provider: trackProvider ?? "netease", title: nil, artist: nil, coverURL: nil)
+            state.title = nil
+            state.artist = nil
+            state.coverURL = nil
+            // Spec: 保留 elapsed/duration/isPlaying —— 切歌瞬间 audio.currentTime 会重置为 0，
+            // 但 isPlaying 状态可以保留，避免 UI 闪烁。
+            if let songId = trackSongId, !songId.isEmpty {
+                state.songId = songId
+                if let provider = trackProvider, !provider.isEmpty {
+                    state.provider = provider
+                }
+                playback = state
+                // Spec: 立即获取歌词，不等异步查询
+                if songId != lastFetchedLyricSongId {
+                    fetchLyric(for: songId)
+                }
+            } else {
+                // trackChanged 未携带 songId（WebView 未展开过，MINERADIO_API 未拦截到）
+                // 清空 songId，等 queryCurrentTrackFromWebView 查询
+                state.songId = nil
                 playback = state
             }
 
-            // 立即查询 playQueue 获取当前歌曲信息
+            // Spec: 仍查询 playQueue 补全 title/artist/cover 并确认/修正 songId
             queryCurrentTrackFromWebView()
         } else if type == "song" {
             let songId = body["songId"] as? String
@@ -736,6 +813,10 @@ final class MineradioBridgeCoordinator: ObservableObject {
                 ?? (body["duration"] as? NSNumber)?.doubleValue ?? 0
             let isPlaying = (body["isPlaying"] as? Bool) ?? false
             let provider = body["provider"] as? String
+            let msgSongId = body["songId"] as? String
+
+            // Spec: 记录上次收到 WKWebView playback 消息的时间，用于检测陈旧状态
+            lastPlaybackMessageTime = Date()
 
             var state = playback ?? MineradioPlaybackState(
                 elapsed: 0, duration: 0, isPlaying: false,
@@ -744,7 +825,15 @@ final class MineradioBridgeCoordinator: ObservableObject {
             state.duration = duration
             state.isPlaying = isPlaying
             if let provider = provider { state.provider = provider }
-            // Spec: 不从 playback 消息更新 songId —— songId 只由 trackChanged 设置
+            // Spec: 当 state.songId 为空时从 playback 消息补全 —— JS 端在 notifyTrackChanged
+            // 时已将 pendingSongId 提升为 currentSongId，playback 消息携带的 songId 可靠。
+            // 仅在 songId 为空时补全，避免覆盖 trackChanged/queryCurrentTrack 设置的值。
+            if state.songId == nil, let songId = msgSongId, !songId.isEmpty {
+                state.songId = songId
+                if songId != lastFetchedLyricSongId {
+                    fetchLyric(for: songId)
+                }
+            }
             playback = state
 
             updateCurrentLyric()
