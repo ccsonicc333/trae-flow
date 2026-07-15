@@ -17,7 +17,7 @@ enum MineradioBridgeUserScript {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     /// Bridge 版本标识
-    static let bridgeVersion = "1.3.1"
+    static let bridgeVersion = "1.4.0"
 
     /// API 消息处理器名（普通 API 请求）
     static let apiMessageHandlerName = "mineradioApi"
@@ -45,7 +45,7 @@ enum MineradioBridgeUserScript {
   var BRIDGE_SOURCE = 'mineradio-extension-bridge';
   var PAGE_SOURCE = 'mineradio-web-page';
   // Spec: 固定 fallback 版本 —— 当无法读取网页内置的期望版本时使用
-  var FALLBACK_BRIDGE_VERSION = '1.3.1';
+  var FALLBACK_BRIDGE_VERSION = '1.4.0';
 
   // Spec: 动态获取 Bridge 版本，使其始终与网页端检测的"最新版本"一致，
   // 避免 mineradio.art 反复弹出"Bridge 扩展可更新"提示。
@@ -187,7 +187,6 @@ enum MineradioBridgeUserScript {
 (function () {
   var currentSongId = null;
   var currentProvider = 'netease';
-  var lastPostedSongId = null;
   var lastPostedPlayback = 0;
   /// Spec: 由 MINERADIO_API 拦截缓存的 songId（可能是预缓冲的下一首歌，还未实际播放）
   /// 仅当 audio.src 真正变化时才提升为 currentSongId 并通知 Swift 端
@@ -196,6 +195,11 @@ enum MineradioBridgeUserScript {
   var lastNotifiedSrc = '';
   /// Spec: 已通知 Swift 端的 songId（避免重复通知同一首歌）
   var notifiedSongId = null;
+  /// Spec: 上次 postSong 发送的 title/artist/coverURL，用于检测变化避免重复发送。
+  /// notifyTrackChanged 时重置为 null，让后续重试能发送新歌的 DOM 数据。
+  var lastSentTitle = null;
+  var lastSentArtist = null;
+  var lastSentCoverURL = null;
 
   function postMsg(payload) {
     try {
@@ -241,8 +245,6 @@ enum MineradioBridgeUserScript {
   }
 
   function postSong() {
-    if (lastPostedSongId === currentSongId) return;
-    lastPostedSongId = currentSongId;
     var title = null, artist = null, coverURL = null;
     try {
       // Spec: 优先从底部播放控制栏的明确 ID 提取当前歌曲标题/艺术家。
@@ -329,6 +331,12 @@ enum MineradioBridgeUserScript {
         }
       }
     } catch (_) {}
+    // Spec: 只在 title/artist/coverURL 变化时发送 —— 支持 notifyTrackChanged 调度的多次重试。
+    // DOM 在 trackChanged 瞬间可能尚未更新，重试捕获更新后的正确值。
+    if (title === lastSentTitle && artist === lastSentArtist && coverURL === lastSentCoverURL) return;
+    lastSentTitle = title;
+    lastSentArtist = artist;
+    lastSentCoverURL = coverURL;
     postMsg({ type: 'song', songId: currentSongId, provider: currentProvider, title: title, artist: artist, coverURL: coverURL });
   }
 
@@ -346,16 +354,60 @@ enum MineradioBridgeUserScript {
     postPlayback(audio);
   }
 
+  /// Spec: 从 window.playQueue[currentIdx] 同步查询当前歌曲信息。
+  /// 这是 trackChanged 时最可靠的 songId 来源 —— audio.src 变化时 playQueue[currentIdx]
+  /// 已指向实际播放的歌曲（预缓冲只提前推进到下一首，audio.src 变化时已对齐）。
+  ///
+  /// 为什么不用 pendingSongId：pendingSongId 由 /api/song/url 拦截缓存，但用户手动选歌时
+  /// 若音频 URL 已缓存，/api/song/url 不会被调用，pendingSongId 会停留在上一首歌的 ID，
+  /// 导致 songId 错误 → 歌词错误。playQueue[currentIdx] 是 UI 状态，始终反映实际播放歌曲。
+  function queryPlayQueueCurrent() {
+    try {
+      var q = window.playQueue;
+      if (!q || !Array.isArray(q) || q.length === 0) return null;
+      var idxNames = ['currentIdx','currentIndex','curIndex','idx','index','playingIdx','playIndex','currentSongIdx','songIndex'];
+      for (var i = 0; i < idxNames.length; i++) {
+        var idx = window[idxNames[i]];
+        if (typeof idx !== 'number' || idx < 0 || idx >= q.length) continue;
+        var s = q[idx];
+        if (!s || typeof s !== 'object') continue;
+        var info = { songId: null, title: null, artist: null, provider: null, coverURL: null };
+        if (s.id != null) { info.songId = String(s.id); }
+        if (s.name) { info.title = s.name; }
+        else if (s.title) { info.title = s.title; }
+        if (s.artist) { info.artist = s.artist; }
+        else if (s.artists) {
+          if (typeof s.artists === 'string') { info.artist = s.artists; }
+          else if (Array.isArray(s.artists) && s.artists.length > 0) {
+            var first = s.artists[0];
+            info.artist = typeof first === 'string' ? first : (first.name || '');
+          }
+        }
+        if (s.provider) { info.provider = s.provider; }
+        else if (s.source) { info.provider = s.source; }
+        var coverFields = ['cover','picUrl','albumimg','pic','albumPic','coverUrl','cover_url','imgurl','img','artwork','thumbnail'];
+        for (var ci = 0; ci < coverFields.length; ci++) {
+          var v = s[coverFields[ci]];
+          if (v && typeof v === 'string') {
+            if (v.indexOf('http') === 0 || v.indexOf('data:image/') === 0) {
+              info.coverURL = v; break;
+            }
+          }
+        }
+        return info;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   /// Spec: 当 audio.src 真正变化时，发 trackChanged 消息通知 Swift 端实际切歌。
   /// 这是唯一可靠的切歌信号 —— mineradio.art 会在当前歌曲后半段提前请求下一首歌的
   /// URL/lyric（预缓冲），此时 MINERADIO_API 拦截会拿到下一首 songId，但 audio.src
   /// 还没变。只有当 audio.src 真正改变时才是实际播放切换。
   ///
-  /// Spec: trackChanged 携带 pendingSongId 作为"最佳猜测" —— audio.src 变化时
-  /// pendingSongId 大概率就是当前歌曲（因为 Mineradio 预缓冲的就是下一首）。
-  /// Swift 端收到后立即用此 songId 获取歌词，不等 queryCurrentTrackFromWebView 的
-  /// 异步结果。queryCurrentTrackFromWebView 仍会执行以补全 title/artist/cover 并
-  /// 确认/修正 songId。
+  /// Spec: 优先从 playQueue[currentIdx] 获取 songId/title/artist/coverURL —— 这是
+  /// trackChanged 时最可靠的来源。pendingSongId 仅作为 playQueue 不可用时的回退。
+  /// trackChanged 消息携带完整元数据，让 Swift 端立即显示并获取歌词。
   function notifyTrackChanged(audio) {
     var newSrc = audio.src || '';
     if (newSrc === lastNotifiedSrc) return;
@@ -364,18 +416,39 @@ enum MineradioBridgeUserScript {
     // 不重置的话，前一首最后一个 timeupdate/ended 事件刚触发过 200ms 节流，新歌首个
     // 播放事件会被丢弃，Swift 端拿不到新的 elapsed/duration，UI 卡在 0 秒。
     lastPostedPlayback = 0;
-    // Spec: 将 pendingSongId 提升为 currentSongId —— audio.src 变化说明实际切歌，
-    // 此时 pendingSongId（由 MINERADIO_API 预缓冲拦截缓存）大概率就是当前歌曲 ID。
-    // 这让 postSong() 和后续 postPlayback() 都能携带正确的 songId。
-    if (pendingSongId) {
+
+    // Spec: 优先从 playQueue[currentIdx] 获取 songId —— 比 pendingSongId 更可靠。
+    // pendingSongId 在用户手动选歌且 URL 已缓存时会停留在旧值。
+    var trackInfo = queryPlayQueueCurrent();
+    if (trackInfo && trackInfo.songId) {
+      currentSongId = trackInfo.songId;
+      if (trackInfo.provider) { currentProvider = trackInfo.provider; }
+    } else if (pendingSongId) {
+      // Fall back to pendingSongId if playQueue is unavailable
       currentSongId = pendingSongId;
-      // 重置 lastPostedSongId 让 postSong() 重新发 song 消息
-      lastPostedSongId = null;
     }
-    // Spec: 携带 songId 和 provider，让 Swift 端立即获取歌词，不等异步查询
-    postMsg({ type: 'trackChanged', songId: currentSongId, provider: currentProvider });
-    // 延迟 300ms 等 DOM 更新完成，发 song 消息补全 title/artist/coverURL
+
+    // Spec: 重置 postSong 发送状态，让后续重试能发送新歌的 DOM 数据
+    lastSentTitle = null;
+    lastSentArtist = null;
+    lastSentCoverURL = null;
+
+    // Spec: trackChanged 携带 playQueue 查询到的 title/artist/coverURL，让 Swift 端立即显示
+    postMsg({
+      type: 'trackChanged',
+      songId: currentSongId,
+      provider: currentProvider,
+      title: trackInfo ? trackInfo.title : null,
+      artist: trackInfo ? trackInfo.artist : null,
+      coverURL: trackInfo ? trackInfo.coverURL : null
+    });
+
+    // Spec: 调度 postSong 重试 —— DOM 在 trackChanged 瞬间可能尚未更新，
+    // 多次重试确保捕获 DOM 更新后的正确 title/artist/coverURL 作为修正。
     setTimeout(function() { postSong(); }, 300);
+    setTimeout(function() { postSong(); }, 800);
+    setTimeout(function() { postSong(); }, 1500);
+    setTimeout(function() { postSong(); }, 3000);
   }
 
   function scanAudios() {

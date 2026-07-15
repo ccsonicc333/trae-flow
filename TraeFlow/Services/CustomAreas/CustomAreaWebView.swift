@@ -148,6 +148,9 @@ struct CustomAreaWebView: NSViewRepresentable {
         // 同步当前 areaID 与网络访问策略（区域/源切换时 JS Bridge 与导航策略需引用最新值）
         context.coordinator.currentAreaID = source.areaID
         context.coordinator.allowsNetworkAccess = source.allowsNetworkAccess
+        // Spec: 同步保活标记与缓存键 —— dismantleNSView 据此决定是否移入离屏窗口
+        context.coordinator.keepsAlive = keepsAlive
+        context.coordinator.cachedURLString = cachedURL()?.absoluteString
         // 同步源类型 —— decidePolicyFor 据此区分跳转策略：
         // - `.remoteURL`：同 host 在 WebView 内导航，不同 host 转系统浏览器
         // - `.mineradio`：所有 http/https 主框架导航在 WebView 内（允许跨 host）
@@ -205,6 +208,9 @@ struct CustomAreaWebView: NSViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.currentAreaID = source.areaID
         context.coordinator.allowsNetworkAccess = source.allowsNetworkAccess
+        // Spec: 同步保活标记与缓存键 —— dismantleNSView 据此决定是否移入离屏窗口
+        context.coordinator.keepsAlive = keepsAlive
+        context.coordinator.cachedURLString = cachedURL()?.absoluteString
         if case .remoteURL = source {
             context.coordinator.isRemoteSource = true
             context.coordinator.isMineradioSource = false
@@ -252,6 +258,9 @@ struct CustomAreaWebView: NSViewRepresentable {
         // 同步当前 areaID 与网络访问策略（区域/源切换时 JS Bridge 与导航策略需引用最新值）
         context.coordinator.currentAreaID = source.areaID
         context.coordinator.allowsNetworkAccess = source.allowsNetworkAccess
+        // Spec: 同步保活标记与缓存键 —— dismantleNSView 据此决定是否移入离屏窗口
+        context.coordinator.keepsAlive = keepsAlive
+        context.coordinator.cachedURLString = cachedURL()?.absoluteString
         // 同步源类型 —— decidePolicyFor 据此区分跳转策略
         if case .remoteURL = source {
             context.coordinator.isRemoteSource = true
@@ -318,6 +327,19 @@ struct CustomAreaWebView: NSViewRepresentable {
         Coordinator()
     }
 
+    /// Spec: SwiftUI 移除宿主视图时调用。当 `keepsAlive` 为 true 时，将 WKWebView 移入
+    /// 离屏宿主窗口，使其仍在窗口层级中 —— 否则 macOS 会挂起不在任何 NSWindow 中的
+    /// WKWebView 的 JS 执行，导致 mineradio.art 播完一首歌后无法自动播放下一首
+    ///（自动切歌逻辑依赖 JS timer/event 回调，JS 挂起后需重新展开页面才恢复）。
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        guard coordinator.keepsAlive,
+              let urlString = coordinator.cachedURLString,
+              let url = URL(string: urlString) else { return }
+        // 仅处理仍是缓存实例的 WebView（避免 evict 后操作已释放的 view）
+        guard CustomAreaWebViewCache.shared.webView(for: url) === nsView else { return }
+        CustomAreaWebViewCache.shared.hostInOffscreenWindow(nsView)
+    }
+
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         /// 上次加载的本地区域 ID（UUID）
@@ -340,6 +362,12 @@ struct CustomAreaWebView: NSViewRepresentable {
         ///（mineradio.art 可能跳转 OAuth 回调或其他 host）。
         /// Spec: mineradio-bridge-compat-layer
         var isMineradioSource: Bool = false
+        /// Spec: 保活标记 —— `dismantleNSView` 据此决定是否将 WebView 移入离屏窗口。
+        /// 在 makeNSView / updateNSView 中由 keepsAlive 同步。
+        var keepsAlive: Bool = false
+        /// Spec: 缓存键 URL（absoluteString）—— `dismantleNSView` 据此查找缓存实例。
+        /// 仅 `.remoteURL` / `.mineradio` 源有值，`.localArea` 为 nil。
+        var cachedURLString: String?
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             // 源标识在 loadArea 中同步，无需在此推导

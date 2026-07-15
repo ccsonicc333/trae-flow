@@ -66,6 +66,13 @@ final class MineradioBridgeCoordinator: ObservableObject {
     private var lastFetchedLyricSongId: String?
     /// 歌词获取中标记（避免重复请求）
     private var isFetchingLyric = false
+    /// Spec: 当前正在获取歌词的 songId。用于允许不同 songId 的请求并发 ——
+    /// 旧实现用布尔锁 `isFetchingLyric`，第一首歌请求进行中时切到第二首会被
+    /// `guard !isFetchingLyric` 挡掉，`lastFetchedLyricSongId` 停在旧值，
+    /// 新歌歌词永远不会被请求（旧请求回调被 songId 守卫丢弃）。
+    /// 现在改为只阻止对同一 songId 的重复请求，不同 songId 的旧请求回调会被
+    /// `parseLyricResponse` 的 songId 守卫自动丢弃。
+    private var fetchingLyricSongId: String?
 
     /// Spec: 订阅 NowPlayingProvider 流式更新 —— mineradio.art 的 `<audio>` 由系统 MediaRemote
     /// 统一 hook（无需依赖 WKWebView 注入脚本），用其 elapsed/duration/isPlaying 驱动歌词 progression。
@@ -105,11 +112,16 @@ final class MineradioBridgeCoordinator: ObservableObject {
     /// Mineradio 在 WKWebView 内播放 `<audio>`，系统 MediaRemote 会把 TRAE FLOW app 作为 source，
     /// title 通常是网页 `<title>`（"Mineradio — 在线音乐可视化播放器"）。
     ///
-    /// Spec: MediaRemote 用于检测"是否有 Mineradio 在播放"（isPlaying）和补全 title/artist。
+    /// Spec: MediaRemote 仅用于检测"是否有 Mineradio 在播放"（isPlaying）和补全 elapsed/duration。
+    /// title/artist/cover 完全不采用 MediaRemote 的值 —— WKWebView 的 `<audio>` 不会向 MediaRemote
+    /// 发布歌曲元数据，MediaRemote 报告的 title 可能是：
+    ///   1. 网页标题（"Mineradio — 在线音乐可视化播放器"，已被 isNonSongTitleText 过滤）
+    ///   2. 上一个 MediaRemote 源的残留 title（如 Music.app 切换到 Mineradio 后 title 仍为旧歌）
+    ///   3. 空
+    /// 这些都不可靠，title/artist/cover 只从 WKWebView DOM/playQueue 获取。
     /// elapsed/duration 优先用 WKWebView `playback` 消息（最准确），但当 WKWebView 不在视图层级
     /// （Flow 岛收起）时 JS 事件可能暂停，playback 消息停止到达。此时用 MediaRemote 的
     /// elapsed/duration 作为回退，避免 UI 卡在旧值/0 秒。
-    /// 切歌瞬间（trackChanged 后 3 秒内）仍只用 WKWebView 的值，避免 MediaRemote 旧 elapsed 干扰。
     private func handleNowPlayingUpdate(_ info: NowPlayingInfo?) {
         guard let info = info else {
             // 播放停止：若之前是 Mineradio 在播，清空状态
@@ -155,19 +167,9 @@ final class MineradioBridgeCoordinator: ObservableObject {
             if state.duration == 0 { state.duration = info.duration }
         }
 
-        // 若 WKWebView 脚本未提供 songId，且 title 不是页面标题，则用 MediaRemote 的 title
-        if state.songId == nil, let title = info.title, !title.isEmpty {
-            // 过滤页面标题 "Mineradio — 在线音乐可视化播放器" 和 "本地歌曲"
-            if !isNonSongTitleText(title) {
-                if state.title != title {
-                    NSLog("[MineradioPlayback] MediaRemote title changed: %@ → %@", state.title ?? "nil", title)
-                    state.title = title
-                }
-            }
-        }
-        if state.artist == nil, let artist = info.artist, !artist.isEmpty {
-            state.artist = artist
-        }
+        // Spec: 不从 MediaRemote 设置 title/artist —— MediaRemote 对 WKWebView `<audio>` 的
+        // title 报告不可靠（可能是网页标题、上一个源的残留、或空）。title/artist 只从
+        // WKWebView DOM/playQueue 获取（trackChanged/song 消息/queryCurrentTrackFromWebView）。
         playback = state
 
         // Spec: 不在 MediaRemote 更新里驱动歌词 —— 由 WKWebView playback 消息驱动
@@ -302,40 +304,51 @@ final class MineradioBridgeCoordinator: ObservableObject {
                 return
             }
 
-            // Spec: 如果当前 playback 已经有 songId，必须和查询结果一致才接受 title/artist。
-            // 防止 playQueue 提前推进到下一首（Mineradio 预缓冲）或误匹配导致错误 title 覆盖。
+            // Spec: 如果当前 playback 已经有 songId，必须和查询结果一致才接受更新。
+            // 防止 playQueue 提前推进到下一首（Mineradio 预缓冲）或误匹配导致错误数据覆盖。
             let currentSongId = self.playback?.songId
             if let currentSongId = currentSongId, !currentSongId.isEmpty, currentSongId != songId {
-                NSLog("[MineradioPlayback] queryCurrentTrack: songId mismatch (current %@, got %@), drop title update",
+                NSLog("[MineradioPlayback] queryCurrentTrack: songId mismatch (current %@, got %@), drop update",
                       currentSongId, songId)
-                // 仅当需要时加载封面（封面通常和 songId 绑定，不一致也不加载）
                 return
             }
 
             // 更新 playback 状态
-            // Spec: queryCurrentTrackFromWebView 只更新 songId/provider/cover，不更新 title/artist。
-            // title/artist 由 postSong() 从底部播放控制栏的 #control-title/#control-artist 提取，
-            // 更准确地反映"当前正在播放"的歌曲。playQueue 可能预缓冲下一首，或 audio.src
-            // 变化后 DOM 还没更新，用 playQueue 的 title 容易出错。
+            // Spec: queryCurrentTrackFromWebView 更新 songId/provider/title/artist/cover。
+            // songId guard 已确保 playQueue[currentIdx] 与当前 playback.songId 一致 ——
+            // 在 trackChanged 调用路径下，playQueue[currentIdx] 在 audio.src 变化时已对齐到
+            // 实际播放歌曲，title/artist 可安全采用。这是 postSong 之外的第二条 title/artist
+            // 补全路径，当 postSong 读到的 DOM 还未更新时由此路径兜底。
             var state = self.playback ?? MineradioPlaybackState(
                 elapsed: 0, duration: 0, isPlaying: false,
                 songId: nil, provider: provider ?? "netease", title: nil, artist: nil, coverURL: nil)
             state.songId = songId
             if let provider = provider, !provider.isEmpty { state.provider = provider }
+            // Spec: 补全 title/artist（仅当查询结果非空且为合法歌曲标题时）
+            if let title = title, !title.isEmpty, !self.isNonSongTitleText(title) {
+                if state.title != title { state.title = title }
+            }
+            if let artist = artist, !artist.isEmpty, state.artist != artist {
+                state.artist = artist
+            }
 
             // 触发歌词获取（仅当 songId 变化）
             if songId != self.lastFetchedLyricSongId {
                 self.fetchLyric(for: songId)
             }
 
-            // 加载封面
-            if self.coverImage == nil && coverType != "none" && coverType != "blob" {
+            // Spec: 加载封面 —— coverURL 变化时也重新加载（修正 trackChanged 阶段可能加载的错误封面）
+            if coverType != "none" && coverType != "blob" {
                 if coverType == "data" {
                     self.fetchCoverDataFromWebView(webView)
                 } else if coverType == "http" {
                     if let url = coverURL {
                         if let normalized = self.normalizeCoverURL(url, provider: state.provider) {
-                            self.loadCoverImage(from: normalized, provider: state.provider)
+                            let currentCoverURL = state.coverURL
+                            if currentCoverURL == nil || currentCoverURL != normalized || self.coverImage == nil {
+                                state.coverURL = normalized
+                                self.loadCoverImage(from: normalized, provider: state.provider)
+                            }
                         }
                     }
                 }
@@ -479,35 +492,74 @@ final class MineradioBridgeCoordinator: ObservableObject {
 
             let coverType = dict["coverType"] ?? "none"
             let coverURL = dict["coverURL"]
-            // Spec: 不从 queryCoverAndSongFromWebView 更新 songId/title/artist ——
-            // mineradio.art 会在当前歌曲播放到后半段时提前推进 playQueue[currentIdx] 到下一首歌，
-            // 若在此处读取 songId/title 会污染 playback 状态，导致歌词提前切换到下一首歌。
-            // songId/title/artist 只由 "song" 消息路径更新（由实际音频播放的 MINERADIO_API 拦截触发）。
+            let queriedSongId = dict["songId"]
+            let queriedTitle = dict["title"]
+            let queriedArtist = dict["artist"]
             let debug = dict["debug"] ?? ""
 
-            NSLog("[MineradioPlayback] queryMeta: coverType=%@ coverURL=%@ debug=%@",
+            NSLog("[MineradioPlayback] queryMeta: coverType=%@ coverURL=%@ songId=%@ title=%@ debug=%@",
                   coverType,
                   coverURL != nil ? String(coverURL!.prefix(60)) : "nil",
+                  queriedSongId ?? "nil",
+                  queriedTitle ?? "nil",
                   String(debug.prefix(300)))
 
             let provider = self.playback?.provider
-            let state = self.playback ?? MineradioPlaybackState(
+            var state = self.playback ?? MineradioPlaybackState(
                 elapsed: 0, duration: 0, isPlaying: false,
                 songId: nil, provider: provider ?? "netease", title: nil, artist: nil, coverURL: nil)
 
-            // Spec: 仅处理封面加载，不更新 songId/title/artist
-            if self.coverImage == nil && coverType != "none" && coverType != "blob" {
-                NSLog("[MineradioPlayback] coverImage nil, fetching: type=%@", coverType)
+            // Spec: songId guard —— 仅当查询到的 songId 与当前 playback.songId 一致
+            // （或当前 songId 为 nil/空，或查询未拿到 songId 即纯 DOM 回退）时才更新 title/artist。
+            // mineradio.art 会在当前歌曲播放到后半段时提前推进 playQueue[currentIdx] 到下一首歌，
+            // 若不加 guard 会把下一首歌的 title/artist 提前写到 UI，导致歌词/标题错位。
+            // 当 queriedSongId 为 nil（playQueue 未命中，title 来自 DOM #control-title）时，
+            // DOM 显示的是实际正在播放的歌曲，可安全采用。
+            let currentSongId = state.songId
+            let currentIsEmpty = currentSongId == nil || currentSongId?.isEmpty == true
+            let queriedIsEmpty = queriedSongId == nil || queriedSongId?.isEmpty == true
+            let songIdMatches = currentIsEmpty || queriedIsEmpty || currentSongId == queriedSongId
+
+            var didUpdate = false
+            if songIdMatches {
+                if let title = queriedTitle, !title.isEmpty, !self.isNonSongTitleText(title),
+                   state.title != title {
+                    state.title = title
+                    didUpdate = true
+                }
+                if let artist = queriedArtist, !artist.isEmpty, state.artist != artist {
+                    state.artist = artist
+                    didUpdate = true
+                }
+            }
+
+            // Spec: 封面加载 —— coverURL 变化时重新加载（修正旧封面），或 coverImage 为 nil 时加载。
+            // 旧实现仅在 coverImage == nil 时加载，导致切歌后若已加载错误封面则无法修正。
+            if coverType != "none" && coverType != "blob" {
                 if coverType == "data" {
-                    self.fetchCoverDataFromWebView(webView)
+                    // data URI 不易做变化检测，仅在 coverImage 为 nil 时加载
+                    if self.coverImage == nil {
+                        NSLog("[MineradioPlayback] coverImage nil, fetching: type=data")
+                        self.fetchCoverDataFromWebView(webView)
+                    }
                 } else if coverType == "http" {
-                    // http 直链 → 用 URLSession + 伪造 Referer 加载（处理防盗链）
                     if let url = coverURL {
                         if let normalized = self.normalizeCoverURL(url, provider: state.provider) {
-                            self.loadCoverImage(from: normalized, provider: state.provider)
+                            let currentCoverURL = state.coverURL
+                            if currentCoverURL == nil || currentCoverURL != normalized || self.coverImage == nil {
+                                NSLog("[MineradioPlayback] loading cover: type=http changed=%@",
+                                      currentCoverURL != normalized ? "yes" : "no")
+                                state.coverURL = normalized
+                                didUpdate = true
+                                self.loadCoverImage(from: normalized, provider: state.provider)
+                            }
                         }
                     }
                 }
+            }
+
+            if didUpdate {
+                self.playback = state
             }
         }
     }
@@ -717,13 +769,16 @@ final class MineradioBridgeCoordinator: ObservableObject {
         }
 
         if type == "trackChanged" {
-            // Spec: trackChanged 携带 pendingSongId 作为"最佳猜测" —— audio.src 变化时
-            // pendingSongId 大概率就是当前歌曲 ID（Mineradio 预缓冲的就是下一首）。
-            // 立即用此 songId 获取歌词，不等 queryCurrentTrackFromWebView 的异步结果。
+            // Spec: trackChanged 携带 playQueue[currentIdx] 查询到的 songId/title/artist/coverURL。
+            // JS 端优先从 playQueue 获取（比 pendingSongId 更可靠 —— 用户手动选歌时
+            // pendingSongId 可能停留在旧值）。
             let trackSongId = body["songId"] as? String
             let trackProvider = body["provider"] as? String
-            NSLog("[MineradioPlayback] trackChanged signal received, songId=%@ provider=%@",
-                  trackSongId ?? "nil", trackProvider ?? "nil")
+            let trackTitle = body["title"] as? String
+            let trackArtist = body["artist"] as? String
+            let trackCoverURL = body["coverURL"] as? String
+            NSLog("[MineradioPlayback] trackChanged signal received, songId=%@ provider=%@ title=%@",
+                  trackSongId ?? "nil", trackProvider ?? "nil", trackTitle ?? "nil")
 
             // 清除旧封面和歌词（切歌瞬间）
             setCoverImage(nil)
@@ -731,15 +786,28 @@ final class MineradioBridgeCoordinator: ObservableObject {
             currentLyric = nil
             currentLyricProgress = 0
 
-            // Spec: 清空 title/artist/coverURL —— 切歌时旧歌的标题残留会让 compact view
-            // 在新歌无歌词时回退显示旧歌标题（"不知道哪里来的歌名"）。新标题由 song 消息
-            // （postSong 300ms 后发送）或 queryCurrentTrackFromWebView 异步补全。
+            // Spec: 使用 trackChanged 携带的 title/artist/coverURL（来自 playQueue[currentIdx]）。
+            // 旧实现清空 title/artist/coverURL，等 postSong（300ms 后）补全 —— 但 postSong 只
+            // 运行一次，若 DOM 未更新则 title 长时间为 nil，紧凑态空白。现在 trackChanged 立即
+            // 携带 playQueue 数据，紧凑态切歌瞬间即可显示。
             var state = playback ?? MineradioPlaybackState(
                 elapsed: 0, duration: 0, isPlaying: false,
                 songId: nil, provider: trackProvider ?? "netease", title: nil, artist: nil, coverURL: nil)
-            state.title = nil
-            state.artist = nil
-            state.coverURL = nil
+            if let title = trackTitle, !title.isEmpty, !isNonSongTitleText(title) {
+                state.title = title
+            } else {
+                state.title = nil
+            }
+            if let artist = trackArtist, !artist.isEmpty {
+                state.artist = artist
+            } else {
+                state.artist = nil
+            }
+            if let coverURL = trackCoverURL, !coverURL.isEmpty {
+                state.coverURL = normalizeCoverURL(coverURL, provider: trackProvider)
+            } else {
+                state.coverURL = nil
+            }
             // Spec: 保留 elapsed/duration/isPlaying —— 切歌瞬间 audio.currentTime 会重置为 0，
             // 但 isPlaying 状态可以保留，避免 UI 闪烁。
             if let songId = trackSongId, !songId.isEmpty {
@@ -752,14 +820,19 @@ final class MineradioBridgeCoordinator: ObservableObject {
                 if songId != lastFetchedLyricSongId {
                     fetchLyric(for: songId)
                 }
+                // Spec: 立即加载封面（trackChanged 携带的 coverURL 来自 playQueue）
+                if let coverURL = state.coverURL {
+                    loadCoverImage(from: coverURL, provider: state.provider)
+                }
             } else {
-                // trackChanged 未携带 songId（WebView 未展开过，MINERADIO_API 未拦截到）
+                // trackChanged 未携带 songId（playQueue 不可用且 pendingSongId 为空）
                 // 清空 songId，等 queryCurrentTrackFromWebView 查询
                 state.songId = nil
                 playback = state
             }
 
-            // Spec: 仍查询 playQueue 补全 title/artist/cover 并确认/修正 songId
+            // Spec: 仍查询 playQueue 补全/修正 —— JS 端 queryPlayQueueCurrent 可能因时序问题
+            // 未拿到数据，Swift 端异步查询作为备份。songId guard 防止预缓冲污染。
             queryCurrentTrackFromWebView()
         } else if type == "song" {
             let songId = body["songId"] as? String
@@ -797,9 +870,15 @@ final class MineradioBridgeCoordinator: ObservableObject {
                 if state.coverURL != normalized {
                     state.coverURL = normalized
                     didUpdate = true
-                }
-                // 加载封面图片
-                if let normalized = normalized, coverImage == nil {
+                    // Spec: coverURL 变化时重新加载封面 —— 旧实现仅在 coverImage == nil 时加载，
+                    // 导致切歌瞬间若 postSong 读到旧 DOM 的 coverURL 并加载了错误封面，
+                    // 后续重试拿到正确 coverURL 也无法修正（coverImage 已非 nil）。
+                    // 现在只要 coverURL 变化就重新加载，确保封面与实际播放歌曲一致。
+                    if let normalized = normalized {
+                        loadCoverImage(from: normalized, provider: provider)
+                    }
+                } else if let normalized = normalized, coverImage == nil {
+                    // coverURL 未变但封面还没加载（首次加载）
                     loadCoverImage(from: normalized, provider: provider)
                 }
             }
@@ -980,7 +1059,10 @@ final class MineradioBridgeCoordinator: ObservableObject {
             currentLyricProgress = 0
             return
         }
-        guard !isFetchingLyric else { return }
+        // Spec: 只阻止对同一 songId 的重复请求。不同 songId 的请求允许并发 ——
+        // 旧请求的回调会被 parseLyricResponse 的 songId 守卫自动丢弃。
+        // 旧实现用 `guard !isFetchingLyric` 会挡掉切歌期间的新请求，导致前几首歌词不显示。
+        if fetchingLyricSongId == songId { return }
         // Spec: 不缓存空歌词 songId —— 之前缓存会导致后续切到同一首歌时不重新请求，
         // 若首次失败是网络问题，后续永远拿不到歌词。每次切歌都重新请求。
 
@@ -990,6 +1072,7 @@ final class MineradioBridgeCoordinator: ObservableObject {
         currentLyricProgress = 0
 
         isFetchingLyric = true
+        fetchingLyricSongId = songId
         lastFetchedLyricSongId = songId
 
         let payload: [String: Any] = [
@@ -1001,14 +1084,22 @@ final class MineradioBridgeCoordinator: ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isFetchingLyric = false
+                // Spec: 仅当此次请求是最后一个发起的请求时才清空 fetchingLyricSongId。
+                // 若切歌后又发起了新请求，fetchingLyricSongId 已是新 songId，不应清空。
+                if self.fetchingLyricSongId == songId {
+                    self.fetchingLyricSongId = nil
+                }
                 switch result {
                 case .success(let data):
                     self.parseLyricResponse(data, songId: songId)
                 case .failure(let error):
                     NSLog("[MineradioBridge] fetchLyric(%@) failed: %@", songId, error.localizedDescription)
-                    self.lyricLines = []
-                    self.currentLyric = nil
-                    self.currentLyricProgress = 0
+                    // Spec: 仅当当前仍是这首歌时才清空（避免清掉新歌的歌词）
+                    if self.playback?.songId == songId {
+                        self.lyricLines = []
+                        self.currentLyric = nil
+                        self.currentLyricProgress = 0
+                    }
                 }
             }
         }
