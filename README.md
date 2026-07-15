@@ -2,7 +2,7 @@
   TRAE FLOW
 </h1>
 <p align="center">
-  <b>macOS TRAE 任务灵动岛</b><br>
+  <b>使用TRAE创建专属于你的 Mac 灵动岛</b><br>
   <a href="#安装">安装</a> •
   <a href="#功能">功能</a> •
   <a href="#从源码构建">构建</a> •
@@ -41,8 +41,6 @@ TRAE FLOW 延续了 [ping-island](https://github.com/erha19/ping-island) 和 [vi
 - **🌐 网页嵌入** — 在灵动岛中直接嵌入任意远程网页，支持自定义名称、URL 和图标，并保持后台运行。
 - **Trae 官方 Hook** — 对接 Trae 官方 Hook 系统（`~/.trae-cn/hooks.json` 全局，`$PROJECT/.trae/hooks.json` 项目级），支持 `variant` 字段路由。
 - **一键跳回 IDE** — 从灵动岛直接跳回对应 TRAE 变体 IDE 窗口并定位到相关会话。
-- **关注优先 UI** — 在会话需要审批、输入、审查或干预之前保持紧凑状态。
-- **从灵动岛操作** — 无需切换标签页即可审批工具、拒绝请求和回复追问。
 
 <a id="支持的变体"></a>
 
