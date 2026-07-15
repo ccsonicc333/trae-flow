@@ -15,6 +15,7 @@ struct MascotSettingsView: View {
             sandboxAccessSection
             staleThemeSection
             themePackSection
+            animationSpeedSection
             designPromptSection
             downloadHintSection
         }
@@ -146,6 +147,51 @@ struct MascotSettingsView: View {
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.08)))
         }
+    }
+
+    /// 宠物动画速率设置 —— 0 = 完全不动，1 = 正常速度，2 = 2 倍速
+    private var animationSpeedSection: some View {
+        MascotSectionCard(title: "动画速率") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Text(appLocalized: "速率")
+                        .font(.system(size: 12))
+
+                    Slider(value: Binding(
+                        get: { settings.mascotAnimationSpeed },
+                        set: { settings.mascotAnimationSpeed = (Double($0) * 100).rounded() / 100 }
+                    ), in: 0...2, step: 0.1)
+                    .tint(.accentColor)
+
+                    Text(speedLabel(settings.mascotAnimationSpeed))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 44, alignment: .trailing)
+
+                    Button {
+                        settings.mascotAnimationSpeed = 1.0
+                    } label: {
+                        Text(appLocalized: "默认")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(abs(settings.mascotAnimationSpeed - 1.0) < 0.001)
+                }
+
+                Text(appLocalized: "拖动调整宠物动画播放速率。设为 0 时宠物完全静止，1 为正常速度，2 为 2 倍速。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+        }
+    }
+
+    private func speedLabel(_ speed: Double) -> String {
+        if speed <= 0 {
+            return "静止"
+        }
+        return String(format: "%.1f×", speed)
     }
 
     /// TRAE Work Design 生成宠物入口：按钮打开 TRAE Work CN，提示词可复制到 Design 中使用

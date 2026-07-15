@@ -235,12 +235,17 @@ struct MascotView: View {
     /// - 显式传入 `animationTime`（如设置页缩略图传 0）
     /// - `mascotAnimationsEnabled == false`（如设置页缩略图、非悬停预览）
     /// - 能耗策略要求静态帧（除非 `mascotAnimationsIgnoreEnergyPolicy` 显式覆盖）
+    /// - 动画速率设置为 0（完全不动）
     /// 以上任一成立时返回具体值，否则返回 nil（走逐帧动画）。
     private var effectiveAnimationTime: TimeInterval? {
         if let animationTime {
             return animationTime
         }
         guard mascotAnimationsEnabled else { return 0 }
+        // Spec: 用户速率设置为 0 → 完全不动（渲染首帧）
+        // 必须在 mascotAnimationsIgnoreEnergyPolicy 之前检查 —— 否则设置页预览等
+        // 显式要求动画的场景会跳过此检查，速率 0 仍走逐帧动画（表现为和速率 1 一样）
+        if settings.mascotAnimationSpeed <= 0 { return 0 }
         // 设置页展开状态预览等场景显式要求动画，忽略 EnergyGovernor 的静态帧降级
         if mascotAnimationsIgnoreEnergyPolicy { return nil }
         return energyGovernor.policy.animationLevel == .staticFrames ? 0 : nil
@@ -292,6 +297,10 @@ struct MascotView: View {
 
     /// 主题包逐帧动画：用预裁剪的帧数组驱动 TimelineView，只做 Image 切换不再每帧裁剪。
     /// 帧数按主题包该状态实际声明/推断的帧数，不同状态可不同。
+    /// Spec: 速率通过缩放传入帧索引计算的 time 实现 —— interval 仅控制 TimelineView 刷新频率，
+    /// 不改变 context.date（仍是真实时间）。若只调 interval，speed>1 时刷新更频繁但帧索引不变，
+    /// 表现为"相同帧多画几次"；speed<1 时刷新更慢但帧索引仍按真实时间走，表现为跳帧。
+    /// 正确做法：frameIndex = (time * speed * fps) % frameCount，speed 直接缩放动画进度。
     private func themePackAnimatedFrame(theme: MascotTheme, interval: TimeInterval, status: MascotStatus) -> some View {
         let frames = MascotSpriteCache.shared.frames(for: theme, status: status)
         let layout = MascotFrameLayout.from(
@@ -300,9 +309,10 @@ struct MascotView: View {
         )
         let fps = layout.fps
         let safeFrames = frames.isEmpty ? (MascotSpriteCache.shared.cgImage(for: theme).map { [$0] } ?? []) : frames
+        let speed = settings.mascotAnimationSpeed
 
         return TimelineView(.periodic(from: .now, by: interval)) { context in
-            themePackFrameImage(frames: safeFrames, fps: fps, time: context.date.timeIntervalSinceReferenceDate)
+            themePackFrameImage(frames: safeFrames, fps: fps, time: context.date.timeIntervalSinceReferenceDate * speed)
         }
     }
 
@@ -322,6 +332,8 @@ struct MascotView: View {
 
     /// Adaptive refresh rate based on animation complexity.
     /// Visible pets need enough cadence for the time-based motion to read as animation.
+    /// Spec: 应用用户速率设置 —— interval = baseInterval / speed。speed=0 路径已在
+    /// `effectiveAnimationTime` 转为静态帧，不会走到这里；此处 speed > 0。
     private func adaptiveInterval(for status: MascotStatus) -> TimeInterval {
         let baseInterval: TimeInterval
         switch status {
@@ -333,14 +345,19 @@ struct MascotView: View {
             baseInterval = 1.0 / 30.0
         }
 
+        let reduced: TimeInterval
         switch energyGovernor.policy.animationLevel {
         case .full:
-            return baseInterval
+            reduced = baseInterval
         case .reduced:
-            return baseInterval * 1.6
+            reduced = baseInterval * 1.6
         case .staticFrames:
-            return baseInterval
+            reduced = baseInterval
         }
+
+        let speed = settings.mascotAnimationSpeed
+        guard speed > 0 else { return reduced }
+        return reduced / speed
     }
 
 }

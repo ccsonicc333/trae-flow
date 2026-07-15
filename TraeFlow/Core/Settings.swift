@@ -15,6 +15,7 @@ enum AppSettingsDefaultKeys {
     nonisolated static let floatingPetAnchor = "floatingPetAnchor"
     nonisolated static let floatingPetSizeMode = "floatingPetSizeMode"
     nonisolated static let floatingPetCustomScale = "floatingPetCustomScale"
+    nonisolated static let mascotAnimationSpeed = "mascotAnimationSpeed"
     nonisolated static let presentationModeOnboardingPending = "presentationModeOnboardingPending"
     nonisolated static let notchDetachmentHintPending = "notchDetachmentHintPending"
     nonisolated static let floatingPetSettingsHintPending = "floatingPetSettingsHintPending"
@@ -394,6 +395,7 @@ final class AppSettingsStore: ObservableObject {
         static let floatingPetAnchor = AppSettingsDefaultKeys.floatingPetAnchor
         static let floatingPetSizeMode = AppSettingsDefaultKeys.floatingPetSizeMode
         static let floatingPetCustomScale = AppSettingsDefaultKeys.floatingPetCustomScale
+        static let mascotAnimationSpeed = AppSettingsDefaultKeys.mascotAnimationSpeed
         static let presentationModeOnboardingPending = AppSettingsDefaultKeys.presentationModeOnboardingPending
         static let notchDetachmentHintPending = AppSettingsDefaultKeys.notchDetachmentHintPending
         static let floatingPetSettingsHintPending = AppSettingsDefaultKeys.floatingPetSettingsHintPending
@@ -839,6 +841,18 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(Double(floatingPetCustomScale), forKey: Keys.floatingPetCustomScale)
+        }
+    }
+
+    /// 宠物动画速率倍率。
+    /// - 0 = 完全不动（渲染静态首帧）
+    /// - 1 = 默认正常速度
+    /// - 2 = 2 倍速
+    /// 范围 0...2，默认 1。`MascotView` 据此调整 TimelineView 的 interval（或切换为静态帧）。
+    @Published var mascotAnimationSpeed: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            defaults.set(mascotAnimationSpeed, forKey: Keys.mascotAnimationSpeed)
         }
     }
 
@@ -1321,6 +1335,7 @@ final class AppSettingsStore: ObservableObject {
         let floatingPetAnchor = Self.decodeValue(FloatingPetAnchor.self, from: defaults, key: Keys.floatingPetAnchor)
         let floatingPetSizeModeRaw = defaults.string(forKey: Keys.floatingPetSizeMode)
         let floatingPetCustomScaleRaw = defaults.object(forKey: Keys.floatingPetCustomScale) as? Double
+        let mascotAnimationSpeedRaw = defaults.object(forKey: Keys.mascotAnimationSpeed) as? Double
         let mascotOverrideRaw = Self.mascotOverrides(from: defaults, key: Keys.mascotOverrides)
         // 宠物主题包系统迁移（Task 5）：旧 mascotOverrides / previewMascotKind → 新键
         let hasNewSelectedThemeID = persistedKeys.contains(Keys.selectedMascotThemeID)
@@ -1590,6 +1605,11 @@ final class AppSettingsStore: ObservableObject {
         )
         _floatingPetCustomScale = Published(
             initialValue: CGFloat(floatingPetCustomScaleRaw ?? 0)
+        )
+        // Spec: 默认 1.0（正常速度）；旧版本无此键时回退到 1.0。clamp 到 0...2 防止脏值。
+        let resolvedMascotAnimationSpeed = mascotAnimationSpeedRaw ?? 1.0
+        _mascotAnimationSpeed = Published(
+            initialValue: min(2.0, max(0.0, resolvedMascotAnimationSpeed))
         )
         _presentationModeOnboardingPending = Published(initialValue: Self.boolValue(
             from: defaults,
@@ -1890,6 +1910,11 @@ enum AppSettings {
     static var floatingPetCustomScale: CGFloat {
         get { shared.floatingPetCustomScale }
         set { shared.floatingPetCustomScale = newValue }
+    }
+
+    static var mascotAnimationSpeed: Double {
+        get { shared.mascotAnimationSpeed }
+        set { shared.mascotAnimationSpeed = newValue }
     }
 
     static var presentationModeOnboardingPending: Bool {
