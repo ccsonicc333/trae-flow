@@ -25,6 +25,11 @@ struct GlobalShortcut: Codable, Equatable, Hashable, Sendable {
         displayParts.joined(separator: " ")
     }
 
+    /// 仅修饰键的显示片段（如 `["⌥"]`），用于"修饰键 + 1-9"这类位置式快捷键的标签。
+    var modifierDisplayParts: [String] {
+        modifierSymbols
+    }
+
     var carbonModifierFlags: UInt32 {
         var flags: UInt32 = 0
 
@@ -74,6 +79,13 @@ struct GlobalShortcut: Codable, Equatable, Hashable, Sendable {
     private static func sanitizedModifierFlags(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
         flags.intersection([.control, .option, .shift, .command])
     }
+
+    /// 左侧功能"位置式快捷展开"的默认快捷键模板（Option + 1）。
+    /// 运行时仅取其修饰键，与数字键 1-9 组合展开对应序号的功能。
+    static let defaultLeftFeatureQuickExpandShortcut = GlobalShortcut(
+        keyCode: UInt16(kVK_ANSI_1),
+        modifierFlags: [.option]
+    )
 
     private static let keyDisplayMap: [Int: String] = [
         Int(kVK_ANSI_A): "A",

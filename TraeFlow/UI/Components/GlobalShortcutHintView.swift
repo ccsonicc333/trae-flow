@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ShortcutVisualLabel: View {
-    let shortcut: GlobalShortcut
+    let parts: [String]
     var fontSize: CGFloat = 11
     var foregroundColor: Color = .white.opacity(0.92)
     var keyBackground: Color = Color.black.opacity(0.26)
@@ -12,9 +12,53 @@ struct ShortcutVisualLabel: View {
     var keyCornerRadius: CGFloat = 12
     var compactSingleCharacterKeys = true
 
+    init(shortcut: GlobalShortcut,
+         fontSize: CGFloat = 11,
+         foregroundColor: Color = .white.opacity(0.92),
+         keyBackground: Color = Color.black.opacity(0.26),
+         keyBorder: Color = Color.white.opacity(0.08),
+         keyMinWidth: CGFloat = 24,
+         keyHorizontalPadding: CGFloat = 10,
+         keyVerticalPadding: CGFloat = 7,
+         keyCornerRadius: CGFloat = 12,
+         compactSingleCharacterKeys: Bool = true) {
+        self.parts = shortcut.displayParts
+        self.fontSize = fontSize
+        self.foregroundColor = foregroundColor
+        self.keyBackground = keyBackground
+        self.keyBorder = keyBorder
+        self.keyMinWidth = keyMinWidth
+        self.keyHorizontalPadding = keyHorizontalPadding
+        self.keyVerticalPadding = keyVerticalPadding
+        self.keyCornerRadius = keyCornerRadius
+        self.compactSingleCharacterKeys = compactSingleCharacterKeys
+    }
+
+    init(parts: [String],
+         fontSize: CGFloat = 11,
+         foregroundColor: Color = .white.opacity(0.92),
+         keyBackground: Color = Color.black.opacity(0.26),
+         keyBorder: Color = Color.white.opacity(0.08),
+         keyMinWidth: CGFloat = 24,
+         keyHorizontalPadding: CGFloat = 10,
+         keyVerticalPadding: CGFloat = 7,
+         keyCornerRadius: CGFloat = 12,
+         compactSingleCharacterKeys: Bool = true) {
+        self.parts = parts
+        self.fontSize = fontSize
+        self.foregroundColor = foregroundColor
+        self.keyBackground = keyBackground
+        self.keyBorder = keyBorder
+        self.keyMinWidth = keyMinWidth
+        self.keyHorizontalPadding = keyHorizontalPadding
+        self.keyVerticalPadding = keyVerticalPadding
+        self.keyCornerRadius = keyCornerRadius
+        self.compactSingleCharacterKeys = compactSingleCharacterKeys
+    }
+
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(shortcut.displayParts, id: \.self) { part in
+            ForEach(parts, id: \.self) { part in
                 Text(part)
                     .font(.system(size: fontSize, weight: .bold, design: .rounded))
                     .foregroundColor(foregroundColor)

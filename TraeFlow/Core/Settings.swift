@@ -411,6 +411,8 @@ final class AppSettingsStore: ObservableObject {
         static let openActiveSessionShortcutDisabled = "openActiveSessionShortcutDisabled"
         static let openSessionListShortcut = "openSessionListShortcut"
         static let openSessionListShortcutDisabled = "openSessionListShortcutDisabled"
+        static let leftFeatureQuickExpandShortcut = "leftFeatureQuickExpandShortcut"
+        static let leftFeatureQuickExpandShortcutDisabled = "leftFeatureQuickExpandShortcutDisabled"
         static let routePromptsToTerminal = "routePromptsToTerminal"
         static let autoRoutePromptsToTerminalWhenIdleEnabled = "autoRoutePromptsToTerminalWhenIdleEnabled"
         static let autoRoutePromptsIdleDelay = "autoRoutePromptsIdleDelay"
@@ -946,6 +948,20 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// 左侧功能"位置式快捷展开"快捷键模板（默认 Option + 1）。
+    /// 运行时仅取其修饰键，与数字键 1-9 组合展开对应序号的已启用功能。
+    @Published var leftFeatureQuickExpandShortcut: GlobalShortcut? {
+        didSet {
+            guard !isBootstrapping else { return }
+            Self.persistShortcut(
+                leftFeatureQuickExpandShortcut,
+                defaults: defaults,
+                key: Keys.leftFeatureQuickExpandShortcut,
+                disabledKey: Keys.leftFeatureQuickExpandShortcutDisabled
+            )
+        }
+    }
+
     @Published var routePromptsToTerminal: Bool {
         didSet {
             guard !isBootstrapping else { return }
@@ -1134,6 +1150,11 @@ final class AppSettingsStore: ObservableObject {
         setShortcut(action.defaultShortcut, for: action)
     }
 
+    /// 重置左侧功能"位置式快捷展开"快捷键为默认 Option + 1
+    func resetLeftFeatureQuickExpandShortcut() {
+        leftFeatureQuickExpandShortcut = GlobalShortcut.defaultLeftFeatureQuickExpandShortcut
+    }
+
     var customizedMascotClientCount: Int {
         mascotPerClientOverrideEnabled ? mascotThemeOverrides.count : 0
     }
@@ -1275,6 +1296,21 @@ final class AppSettingsStore: ObservableObject {
         return persistedShortcut ?? action.defaultShortcut
     }
 
+    /// 左侧功能"位置式快捷展开"快捷键的解析：
+    /// - `disabledKey` 为 true → nil（用户主动清空）
+    /// - 否则取持久化值，缺失时回退默认 `Option + 1`
+    private static func resolvedLeftFeatureQuickExpandShortcut(
+        from defaults: UserDefaults,
+        key: String,
+        disabledKey: String
+    ) -> GlobalShortcut? {
+        if defaults.bool(forKey: disabledKey) {
+            return nil
+        }
+        let persisted = shortcut(from: defaults, key: key)
+        return persisted ?? GlobalShortcut.defaultLeftFeatureQuickExpandShortcut
+    }
+
     private static func persistShortcut(
         _ shortcut: GlobalShortcut?,
         defaults: UserDefaults,
@@ -1400,6 +1436,11 @@ final class AppSettingsStore: ObservableObject {
             key: Keys.openSessionListShortcut,
             disabledKey: Keys.openSessionListShortcutDisabled,
             action: .openSessionList
+        )
+        let leftFeatureQuickExpandShortcut = Self.resolvedLeftFeatureQuickExpandShortcut(
+            from: defaults,
+            key: Keys.leftFeatureQuickExpandShortcut,
+            disabledKey: Keys.leftFeatureQuickExpandShortcutDisabled
         )
         let temporarilyMuteNotificationsUntil = temporarilyMuteNotificationsUntilTimestamp.map {
             Date(timeIntervalSince1970: $0)
@@ -1647,6 +1688,7 @@ final class AppSettingsStore: ObservableObject {
         _deletedBuiltinMascotThemeIDs = Published(initialValue: deletedBuiltinMascotThemeIDs)
         _openActiveSessionShortcut = Published(initialValue: openActiveSessionShortcut)
         _openSessionListShortcut = Published(initialValue: openSessionListShortcut)
+        _leftFeatureQuickExpandShortcut = Published(initialValue: leftFeatureQuickExpandShortcut)
         let routePromptsToTerminal = Self.boolValue(
             from: defaults,
             key: Keys.routePromptsToTerminal,

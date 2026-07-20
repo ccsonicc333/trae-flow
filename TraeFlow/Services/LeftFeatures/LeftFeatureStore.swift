@@ -594,4 +594,16 @@ final class LeftFeatureStore: ObservableObject {
         features[index].expandedPinned = pinned
         persist()
     }
+
+    /// 设置功能的独立全局快捷键；nil = 清除，回退位置式默认（修饰键 + 序号）。
+    /// `GlobalShortcutManager` 通过观察 `objectWillChange` 自动刷新注册。
+    func setCustomShortcut(id: String, shortcut: GlobalShortcut?) {
+        guard let index = features.firstIndex(where: { $0.id == id }) else { return }
+        let sanitized: GlobalShortcut? = {
+            guard let shortcut else { return nil }
+            return GlobalShortcut(keyCode: shortcut.keyCode, modifierFlags: shortcut.modifierFlags)
+        }()
+        features[index].customShortcut = sanitized
+        persist()
+    }
 }

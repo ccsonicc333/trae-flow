@@ -1595,10 +1595,31 @@ private struct SettingsPanelContentView: View {
                 )
             }
 
+            SettingsSectionCard(title: "左侧功能快捷展开") {
+                ShortcutRecorderControl(
+                    title: "功能快捷展开修饰键",
+                    subtitle: "修饰键与数字键 1-9 组合，展开左侧功能列表中对应序号的已启用功能。默认 Option + 1/2/3…",
+                    shortcut: $settings.leftFeatureQuickExpandShortcut,
+                    defaultShortcut: GlobalShortcut.defaultLeftFeatureQuickExpandShortcut,
+                    displayMode: .modifierOnly
+                )
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             SettingsSectionCard(title: "说明") {
                 SettingsInfoLine(
                     title: "默认键位",
-                    subtitle: "默认使用 Option + J 打开活跃会话，Option + L 展开会话列表。"
+                    subtitle: "默认使用 Option + J 打开活跃会话，Option + L 展开会话列表；Option + 1/2/3… 展开左侧对应功能。"
+                ) {
+                    EmptyView()
+                }
+                SettingsLineDivider()
+
+                SettingsInfoLine(
+                    title: "独立功能快捷键",
+                    subtitle: "在「左侧功能」设置的功能列表中，每个功能可单独录制一个全局快捷键，直接展开该功能。"
                 ) {
                     EmptyView()
                 }
@@ -2005,6 +2026,14 @@ private struct SettingsPanelContentView: View {
             .buttonStyle(.plain)
 
             Spacer(minLength: 12)
+
+            // 独立快捷键录制（每个功能可单独设置一个全局快捷键直接展开）
+            FeatureRowShortcutRecorder(
+                shortcut: Binding(
+                    get: { feature.customShortcut },
+                    set: { leftFeatureStore.setCustomShortcut(id: feature.id, shortcut: $0) }
+                )
+            )
 
             // 右侧操作组：按 kind 分发
             switch feature.kind {
@@ -4076,9 +4105,11 @@ private struct ShortcutSettingsLine: View {
 
     var body: some View {
         ShortcutRecorderControl(
-            action: action,
+            title: action.title,
+            subtitle: action.subtitle,
             shortcut: $shortcut,
-            defaultShortcut: action.defaultShortcut
+            defaultShortcut: action.defaultShortcut,
+            displayMode: .full
         )
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
@@ -4087,23 +4118,42 @@ private struct ShortcutSettingsLine: View {
 }
 
 private struct ShortcutRecorderControl: View {
-    let action: GlobalShortcutAction
+    enum DisplayMode {
+        /// 显示完整键位（修饰键 + 主键）
+        case full
+        /// 仅显示修饰键 + "1—9"（用于左侧功能位置式快捷展开）
+        case modifierOnly
+    }
+
+    let title: String
+    let subtitle: String
     @Binding var shortcut: GlobalShortcut?
     let defaultShortcut: GlobalShortcut?
+    var displayMode: DisplayMode = .full
 
     @State private var isRecording = false
     @State private var helperTextKey: String?
     @State private var eventMonitor: Any?
 
+    private var displayParts: [String] {
+        guard let shortcut else { return [] }
+        switch displayMode {
+        case .full:
+            return shortcut.displayParts
+        case .modifierOnly:
+            return shortcut.modifierDisplayParts + ["1—9"]
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(appLocalized: action.title)
+                    Text(appLocalized: title)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.white)
 
-                    Text(appLocalized: action.subtitle)
+                    Text(appLocalized: subtitle)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white.opacity(0.58))
                         .fixedSize(horizontal: false, vertical: true)
@@ -4121,7 +4171,7 @@ private struct ShortcutRecorderControl: View {
 
                 if let shortcut {
                     ShortcutVisualLabel(
-                        shortcut: shortcut,
+                        parts: displayParts,
                         fontSize: 11,
                         foregroundColor: .white.opacity(0.92),
                         keyBackground: Color.black.opacity(0.28),
@@ -4276,6 +4326,122 @@ private struct ShortcutIconButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
             )
+    }
+}
+
+/// 功能列表行内的紧凑快捷键录制器：点击切换录制状态，
+/// 录制时按任意「修饰键 + 主键」组合即写入；Esc 取消，Delete 清空。
+private struct FeatureRowShortcutRecorder: View {
+    @Binding var shortcut: GlobalShortcut?
+    @State private var isRecording = false
+    @State private var eventMonitor: Any?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button {
+                toggleRecording()
+            } label: {
+                if isRecording {
+                    Text(appLocalized: "按下快捷键")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule(style: .continuous).fill(TerminalColors.green.opacity(0.96)))
+                } else if let shortcut {
+                    ShortcutVisualLabel(
+                        shortcut: shortcut,
+                        fontSize: 9,
+                        foregroundColor: .white.opacity(0.92),
+                        keyBackground: Color.black.opacity(0.28),
+                        keyBorder: Color.white.opacity(0.08),
+                        keyMinWidth: 18,
+                        keyHorizontalPadding: 5,
+                        keyVerticalPadding: 3,
+                        keyCornerRadius: 7
+                    )
+                } else {
+                    HStack(spacing: 3) {
+                        Image(systemName: "keyboard")
+                            .font(.system(size: 9))
+                        Text(appLocalized: "快捷键")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Capsule(style: .continuous).fill(Color.white.opacity(0.06)))
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                }
+            }
+            .buttonStyle(.plain)
+            .help(AppLocalization.string(isRecording ? "停止录制快捷键" : "为该功能录制独立快捷键"))
+            .accessibilityLabel(Text(appLocalized: isRecording ? "停止录制快捷键" : "为该功能录制独立快捷键"))
+
+            if shortcut != nil && !isRecording {
+                Button {
+                    shortcut = nil
+                    stopRecording()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+                .help(AppLocalization.string("清空快捷键"))
+                .accessibilityLabel(Text(appLocalized: "清空快捷键"))
+            }
+        }
+        .onDisappear {
+            stopRecording()
+        }
+    }
+
+    private func toggleRecording() {
+        if isRecording {
+            stopRecording()
+        } else {
+            startRecording()
+        }
+    }
+
+    private func startRecording() {
+        isRecording = true
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            handleRecording(event)
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        isRecording = false
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+
+    private func handleRecording(_ event: NSEvent) {
+        if event.keyCode == UInt16(kVK_Escape) {
+            stopRecording()
+            return
+        }
+        if event.keyCode == UInt16(kVK_Delete) || event.keyCode == UInt16(kVK_ForwardDelete) {
+            shortcut = nil
+            stopRecording()
+            return
+        }
+        guard let recorded = GlobalShortcut(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags
+        ) else {
+            return
+        }
+        shortcut = recorded
+        stopRecording()
     }
 }
 

@@ -508,6 +508,9 @@ struct NotchView: View {
             .onReceive(NotificationCenter.default.publisher(for: .traeFlowOpenSessionListShortcut)) { _ in
                 handleOpenSessionListShortcut()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .traeFlowExpandLeftFeature)) { notification in
+                handleExpandLeftFeatureShortcut(notification)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .traeFlowPresentNotchDetachmentHint)) { _ in
                 presentDetachmentHintIfNeeded(force: true)
             }
@@ -1768,6 +1771,17 @@ struct NotchView: View {
     private func handleOpenSessionListShortcut() {
         NSApp.activate(ignoringOtherApps: true)
         viewModel.toggleSessionList(reason: .click)
+    }
+
+    /// 左侧功能快捷展开：切到目标功能并展开 Flow 岛左半区面板。
+    private func handleExpandLeftFeatureShortcut(_ notification: Notification) {
+        guard let featureID = notification.userInfo?["featureID"] as? String,
+              LeftFeatureStore.shared.enabledFeatures.contains(where: { $0.id == featureID }) else {
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        LeftFeatureStore.shared.setExpandedActiveFeature(id: featureID)
+        viewModel.presentCustomExpanded(reason: .click)
     }
 
     private func activateTemporaryReminderMute() {
