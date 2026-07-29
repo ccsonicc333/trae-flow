@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Spec: TRAE FLOW 第一阶段同时支持以下四种 Trae 系产品变体。
@@ -56,6 +57,24 @@ enum TraeVariant: String, Codable, Equatable, Hashable, Sendable, CaseIterable, 
         case .traeWork: return "/Applications/TRAE SOLO.app"
         case .traeWorkCN: return "/Applications/TRAE SOLO CN.app"
         }
+    }
+
+    /// Spec: 用户机器上是否已安装该变体应用。
+    /// 双路检测：
+    /// 1. `FileManager` 检查标准安装路径（`/Applications/<appName>.app`）——
+    ///    不受 LaunchServices 缓存影响，对默认安装位置最可靠。
+    /// 2. 回退到 `NSWorkspace.urlForApplication(withBundleIdentifier:)`——
+    ///    可识别非默认安装位置（如 `~/Applications`、自定义路径）。
+    var isInstalled: Bool {
+        if FileManager.default.fileExists(atPath: installPath) {
+            return true
+        }
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) != nil
+    }
+
+    /// 当前用户机器上已安装的全部变体，按 `allCases` 顺序返回。
+    static var installedCases: [TraeVariant] {
+        allCases.filter { $0.isInstalled }
     }
 
     /// Spec 表格中的 URL Scheme

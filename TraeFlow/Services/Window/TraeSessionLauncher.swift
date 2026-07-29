@@ -35,21 +35,44 @@ enum TraeSessionLauncher {
     }
 
     /// Spec: 在 Trae 中打开 — 以指定目录为工作区启动对应变体
+    /// - IDE 系列（trae / trae-cn）：通过 URL Scheme `trae(-cn)://file<path>` 打开，
+    ///   这是 TRAE 官方 Hook 协议定义的工作区打开格式。
+    /// - SOLO/WORK 系列（trae-work / trae-work-cn）：官方暂无 URL Scheme 工作区协议
+    ///   （见 README.md「暂未支持」），改用 `NSWorkspace.open([URL], withApplicationAt:)`，
+    ///   等价于 `open -a "TRAE SOLO" <dir>`，让目标 app 以该目录为工作区打开。
+    /// - 最终回退：仅激活应用窗口（不进入目录）。
     @discardableResult
     static func openWorkspace(_ variant: TraeVariant, directoryURL: URL) -> Bool {
-        // 通过 URL Scheme 以指定目录为工作区打开 IDE（与 SessionClientInfo.appLaunchURL 格式一致）
-        let scheme = variant.urlScheme
-        let encodedPath = directoryURL.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? directoryURL.path
-        let urlString = "\(scheme)://file\(encodedPath)"
+        // IDE 系列：URL Scheme 工作区协议
+        if variant.supportsOfficialTraeHook {
+            let scheme = variant.urlScheme
+            let encodedPath = directoryURL.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? directoryURL.path
+            let urlString = "\(scheme)://file\(encodedPath)"
 
-        if let url = URL(string: urlString) {
-            if NSWorkspace.shared.open(url) {
-                logger.info("Opened workspace in \(variant.displayName) via URL scheme: \(urlString)")
-                return true
+            if let url = URL(string: urlString) {
+                if NSWorkspace.shared.open(url) {
+                    logger.info("Opened workspace in \(variant.displayName) via URL scheme: \(urlString)")
+                    return true
+                }
+                logger.warning("URL scheme open failed for \(variant.displayName): \(urlString), falling back to NSWorkspace.open(_:withApplicationAt:)")
             }
         }
 
-        // 回退：仅激活应用
+        // SOLO 系列 / URL scheme 失败回退：用指定 app 打开目录（等价于 `open -a "App" <dir>`）
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: variant.bundleIdentifier) {
+            let configuration = NSWorkspace.OpenConfiguration()
+            do {
+                try NSWorkspace.shared.open([directoryURL], withApplicationAt: appURL, configuration: configuration)
+                logger.info("Opened directory in \(variant.displayName) via NSWorkspace.open(_:withApplicationAt:): \(directoryURL.path)")
+                return true
+            } catch {
+                logger.error("Failed to open directory in \(variant.displayName): \(error.localizedDescription)")
+            }
+        } else {
+            logger.warning("Application not found for bundle ID: \(variant.bundleIdentifier)")
+        }
+
+        // 最终回退：仅激活应用
         let bundleID = variant.bundleIdentifier
         let success = NSWorkspace.shared.launchApplication(withBundleIdentifier: bundleID, options: [], additionalEventParamDescriptor: nil, launchIdentifier: nil)
         if success {

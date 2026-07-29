@@ -2004,6 +2004,27 @@ private struct SettingsPanelContentView: View {
         .controlSize(.small)
     }
 
+    /// 「在 TRAE 中打开」菜单：始终列出全部四个 TRAE 变体供用户自由选择，
+    /// 选中后以该变体打开当前自定义功能对应的工作区目录。
+    /// - 始终渲染全部变体（不使用 `.disabled`）可避免 SwiftUI Menu 在
+    ///   单一可点击项时自动展平为直接动作，也防止 disabled 项被隐藏。
+    @ViewBuilder
+    private func openInTraeMenu(directoryURL: URL) -> some View {
+        Menu {
+            ForEach(TraeVariant.allCases) { variant in
+                Button(variant.displayName) {
+                    TraeSessionLauncher.openWorkspace(variant, directoryURL: directoryURL)
+                }
+            }
+        } label: {
+            Image(systemName: "hammer.fill")
+                .font(.system(size: 13))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("在 TRAE 中打开")
+    }
+
     /// 单个功能行：图标 + 名称（可点击进入编辑）+ 右侧操作组 + 启用开关。
     /// - `.customArea`: 打开目录（Finder）/ 编辑 / 删除
     /// - `.webURL`: 删除
@@ -2039,15 +2060,8 @@ private struct SettingsPanelContentView: View {
             switch feature.kind {
             case .customArea(let areaID):
                 if let area = customAreaStore.areas.first(where: { $0.id == areaID }) {
-                    // 去 TRAE CN 修改（以该目录为工作区打开 IDE）
-                    Button {
-                        TraeSessionLauncher.openWorkspace(.traeCN, directoryURL: area.directoryURL)
-                    } label: {
-                        Image(systemName: "hammer.fill")
-                            .font(.system(size: 13))
-                    }
-                    .buttonStyle(.borderless)
-                    .help("在 TRAE CN 中打开")
+                    // 在 TRAE 中打开（用户可从已安装的变体中自由选择）
+                    openInTraeMenu(directoryURL: area.directoryURL)
 
                     // 打开目录（Finder）
                     Button {
