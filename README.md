@@ -2,8 +2,9 @@
   TRAE FLOW
 </h1>
 <p align="center">
-  <b>使用TRAE创建专属于你的 Mac 灵动岛</b><br>
+  <b>利用 TRAE 的能力 · 创建专属于你的 Mac 灵动岛</b><br>
   <a href="#安装">安装</a> •
+  <a href="#三条主线">三条主线</a> •
   <a href="#功能">功能</a> •
   <a href="#从源码构建">构建</a> •
   <a href="docs/privacy-policy.md">隐私政策</a>
@@ -12,48 +13,86 @@
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14%2B-0A84FF?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 或更高">
   <img src="https://img.shields.io/badge/Swift-6.1-FA7343?style=flat-square&logo=swift&logoColor=white" alt="Swift 6.1">
-  <img src="https://img.shields.io/badge/Variants-4-111827?style=flat-square" alt="支持 4 个 Trae 变体">
+  <img src="https://img.shields.io/badge/TRAE%20Variants-4-111827?style=flat-square" alt="支持 4 个 TRAE 变体">
   <img src="https://img.shields.io/badge/License-Apache%202.0-4F46E5?style=flat-square" alt="Apache 2.0 许可证">
 </p>
 
 <p align="center">
-  <sub>在 macOS 灵动岛上实时追踪 TRAE 任务，自由组合音乐/中转站/NewsNow/Mineradio/自定义网页组件，还有陪伴编码的桌面宠物。</sub>
+  <sub>TRAE 任务丝滑上岛 · VibeCoding 任意组件上岛 · TRAE Work Design 一键创建电子宠物上岛</sub>
 </p>
 
 ## 什么是 TRAE FLOW？
 
-TRAE FLOW 是一款 macOS 灵动岛应用，当你的 TRAE 编码代理需要关注时，它会展开为一个紧凑的灵动岛风格面板。它监听 Trae 官方 Hook 事件，将审批请求、输入提示、任务完成和会话摘要展示在界面中，无需时刻盯守终端标签页。
+**TRAE FLOW 的核心理念是「利用 TRAE 的能力创建专属于你的 Mac 灵动岛」。**
 
-除了会话监控，TRAE FLOW 还内置了**音乐控制**和**文件中转站**功能，并支持在灵动岛中嵌入自定义 HTML 页面或远程网页。
+市面上的灵动岛应用大多是「别人定义好的岛」——状态是固定的、功能是固定的、可用组件是固定的、宠物也是固定的。TRAE FLOW 不一样：它把灵动岛变成了**你自己的画布**。你关心的 TRAE 任务、你 VibeCoding 写的小组件、你用 TRAE Work Design 设计的电子宠物，都能上岛。
 
-TRAE FLOW 延续了 [ping-island](https://github.com/erha19/ping-island) 和 [vibe-notch](https://github.com/farouqaldori/vibe-notch) 的会话监视器理念，专注于TRAE，提供左右分区 Flow 岛 UI、丰富的内置功能和添加了自定义能力，方便用户可以添加任意想要显示的内容，以及一键跳回任意 TRAE 变体的能力。
+它同时解决了三件事：
 
-## 功能
+- **TRAE 任务状态太分散** — 四个变体、多个窗口，很难一眼判断「谁需要我」。TRAE FLOW 让任务**丝滑上岛**，自动聚合、自动提醒、一键跳回。
+- **灵动岛组件不够自由** — 现有方案大多是固定面板，用户只能看、不能放自己的东西。TRAE FLOW 让你通过 VibeCoding，把任意 HTML、数据看板、小工具**上岛**。
+- **桌面缺少专属陪伴** — 很多效率工具冷冰冰的。TRAE FLOW 让你用 TRAE Work Design 轻松创建自己的电子宠物，让编码过程多一个会动、会反应、属于自己的伙伴。
 
-- **TRAE 任务灵动岛** — 同时监视 TRAE、TRAE CN、TRAE WORK 和 TRAE WORK CN，紧凑态显示各变体任务计数，展开态呈现审批、追问、完成详情，并一键跳回对应 IDE 窗口。
-- **自定义组件** — 灵动岛左侧功能槽自由组合音乐、中转站、NewsNow、Mineradio、本地 HTML 自定义区域和远程网页嵌入，支持拖拽排序、独立开关和展开尺寸记忆。
-- **🐱 桌面宠物** — 基于精灵表动画的 Codex 兼容宠物系统，可在 Flow 岛和桌面显示，支持拖拽.detach、滚轮缩放，内置多套主题包。
-- **🎵 音乐控制** — 系统「正在播放」面板，支持 Music.app、Spotify、网易云音乐、QQ 音乐。紧凑态显示封面与曲目，展开态提供进度条拖拽和完整播放控制；正在播放时自动切换到紧凑态。
-- **📦 中转站** — 文件暂存区，支持拖入文件，展开态以网格展示，可通过 AirDrop 一键分享全部文件。
-- **📰 NewsNow** — 内置 NewsNow 远程实例，在灵动岛中快速浏览新闻资讯。
-- **⛏ Mineradio** — 内置 Mineradio Bridge 兼容层，在灵动岛内播放音乐并显示歌词，支持网易云/QQ/酷狗登录。
-- **📄 自定义区域** — 将本地 HTML 文件夹渲染到灵动岛中，支持 JS Bridge 向紧凑态推送限时通知。首次启动预置「TRAE Flow 演示」示例（默认不启用，可在设置中手动开启）。
-- **🌐 网页嵌入** — 在灵动岛中直接嵌入任意远程网页，支持自定义名称、URL 和图标，并保持后台运行。
-- **Trae 官方 Hook** — 对接 Trae 官方 Hook 系统（`~/.trae-cn/hooks.json` 全局，`$PROJECT/.trae/hooks.json` 项目级），支持 `variant` 字段路由。
-- **一键跳回 IDE** — 从灵动岛直接跳回对应 TRAE 变体 IDE 窗口并定位到相关会话。
+> 从「看岛」到「造岛」——每个人都能造出不一样的岛，每个人都是自己产品的产品经理。
+
+
+## 三条主线
+
+TRAE FLOW 的三条主线对应三种 TRAE 能力和三个用户动作：
+
+### 1. TRAE 任务动态丝滑上岛
+
+通过 Trae 官方 Hook 协议，实时监听 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`、`Notification` 事件，四个 TRAE 变体（TRAE / TRAE CN / TRAE WORK / TRAE WORK CN）的任务状态自动汇聚到 Flow 岛右侧。需要审批、追问、干预时，岛会自动展开；处理完即可一键跳回对应 IDE 窗口，无需在 Dock 和标签页里翻找。
+
+### 2. VibeCoding 任意组件上岛
+
+左侧功能岛完全开放：内置音乐控制、文件中转站、新闻热搜集合，更支持把本地 HTML 目录或任意远程网页直接渲染进灵动岛。通过 `traeFlowHint` JS Bridge，网页还能向灵动岛上推送提示或内容；文件改动通过 FSEvents 实时刷新。**你可以用 TRAE 写一个小组件，下一秒它就出现在你的岛上。**
+
+### 3. TRAE Work Design 一键创建电子宠物上岛
+
+内置基于精灵表的桌面宠物系统，内置 月薪喵、Frieren 等多个主题。更支持从 `~/.traeflow/pets` 加载自定义宠物包，**让你可以用 TRAE Work Design 工作流生成自己的角色素材（已内置完整工作流提示词），一键放上岛**。宠物会随任务状态切换动画，还能拖拽到桌面、滚轮缩放，成为你的专属桌面陪伴。
+
+<a id="功能"></a>
+
+## 功能速览
+
+按三条主线组织，每条主线对应一种 TRAE 能力：
+
+**TRAE 任务动态丝滑上岛**
+
+- 同时监视 TRAE / TRAE CN / TRAE WORK / TRAE WORK CN 四个变体
+- 紧凑态显示各变体待处理任务计数，展开态呈现审批、追问、完成详情
+- 一键跳回对应 TRAE 变体 IDE 窗口
+- 对接 Trae 官方 Hook 系统（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop` / `Notification`）
+
+**VibeCoding 任意组件上岛**
+
+- 🎵 **音乐控制** — 系统「正在播放」面板，支持 Music.app / Spotify / 网易云音乐 / QQ 音乐，紧凑态自动切换
+- 📦 **中转站** — 文件暂存区，支持拖入文件，AirDrop 一键分享
+- 📰 **NewsNow** — 内置 NewsNow 远程实例，灵动岛中浏览新闻资讯
+- ⛏ **Mineradio** — 内置 Mineradio Bridge 兼容层，灵动岛内播放音乐并显示歌词，支持网易云/QQ/酷狗登录
+- 📄 **自定义区域** — 将本地 HTML 文件夹渲染到灵动岛中，支持 JS Bridge 向紧凑态推送限时通知，FSEvents 文件监听自动刷新
+- 🌐 **网页嵌入** — 在灵动岛中直接嵌入任意远程网页，支持自定义名称、URL、图标，收起后可选保持后台运行
+
+**TRAE Work Design 一键创建电子宠物上岛**
+
+- 🐱 **桌面宠物** — 基于精灵表动画的 Codex 兼容宠物系统，可在 Flow 岛和桌面显示，支持拖拽 detach、滚轮缩放
+- 内置多套主题包：TRAE FLOW / 月薪喵 / 光环小猫 / 鸡哥 ikun / Frieren / Homelander / Shinchan / TaoTao
+- 支持从 `~/.traeflow/pets` 或 `~/.codex/pets` 加载自定义宠物包
+- 项目内置 TRAE Work Design 完整工作流提示词，可一键生成自己的角色素材上岛
 
 <a id="支持的变体"></a>
 
 ## 支持的变体
 
-| 变体           | Bundle ID           | URL Scheme   | 官方 Hook                 | Profile ID     |
-| ------------ | ------------------- | ------------ | ----------------------- | -------------- |
-| TRAE         | `com.trae.app`      | `trae://`    | `~/.trae/hooks.json`    | `trae`         |
-| TRAE CN      | `cn.trae.app`       | `trae-cn://` | `~/.trae-cn/hooks.json` | `trae-cn`      |
-| TRAE WORK    | `com.trae.solo.app` | `solo://`    | 暂未支持                    | `trae-work`    |
-| TRAE WORK CN | `cn.trae.solo.app`  | `solo-cn://` | 暂未支持                    | `trae-work-cn` |
+| 变体           | Bundle ID           | URL Scheme   | 官方 Hook 配置路径                          | Profile ID     |
+| ------------ | ------------------- | ------------ | -------------------------------------- | -------------- |
+| TRAE         | `com.trae.app`      | `trae://`    | `~/.trae/hooks.json`                   | `trae`         |
+| TRAE CN      | `cn.trae.app`       | `trae-cn://` | `~/.trae-cn/hooks.json`                | `trae-cn`      |
+| TRAE WORK    | `com.trae.solo.app` | `solo://`    | `~/.trae-solo/hooks.json`（实验性）         | `trae-work`    |
+| TRAE WORK CN | `cn.trae.solo.app`  | `solo-cn://` | `~/.trae-solo-cn/hooks.json`（实验性）      | `trae-work-cn` |
 
-TRAE 和 TRAE CN 支持 Trae 官方 Hook 系统，包含 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 和 `Notification` 事件。TRAE WORK 和 TRAE WORK CN 暂无官方 Hook 支持（`supportsOfficialTraeHook = false`）。
+TRAE 和 TRAE CN 通过 Trae 官方 Hook 协议提供完整事件流支持。**调试中发现 TRAE WORK 系列虽未在设置界面暴露 Hook 入口，但实际可读取 hooks 配置**，TRAE FLOW 已为其预留配置路径与变体路由作为实验性支持，稳定性以 IDE 系列为主。
 
 Bridge 通过 `--variant <value>` 命令行参数区分变体事件来源，因为 Trae 官方 Hook 的 stdin JSON 不包含 variant 字段。
 
@@ -75,7 +114,7 @@ Bridge 通过 `--variant <value>` 命令行参数区分变体事件来源，因�
 - **左侧**：当前功能的展开内容，或活跃会话详情（审批、追问、完成）。
 - **右侧**：各变体待处理任务计数及跳回 IDE 按钮。
 
-## 内置功能
+## 内置功能详情
 
 ### 🎵 音乐
 
@@ -249,7 +288,14 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug COD
 
 ## 致谢
 
-TRAE FLOW 延续了[ping-island](https://github.com/erha19/ping-island) 、[vibe-notch](https://github.com/farouqaldori/vibe-notch) 、[boring.notch](https://github.com/TheBoredTeam/boring.notch)、 [claude-island](https://github.com/farouqaldori/claude-island) 等灵动岛风格代理监视器的理念。在此基础上提供TRAE版本的功能和自定义显示内容。
+TRAE FLOW 延续了 [ping-island](https://github.com/erha19/ping-island)、[vibe-notch](https://github.com/farouqaldori/vibe-notch)、[boring.notch](https://github.com/TheBoredTeam/boring.notch)、[claude-island](https://github.com/farouqaldori/claude-island)、[nookX](https://github.com/juyongkim/NookX) 等灵动岛风格代理监视器与功能软件的形态探索。在这些产品验证的形态基础上，TRAE FLOW 把注意力从「监视」转移到「创造」——让每个用户都能造出属于自己的岛。
+
+## 项目愿景
+
+- 后期拓展为 **TRAE 社区灵动岛组件 / 宠物板块**，大家可以分享自己创作的灵动岛组件、宠物，提升社区用户活跃度，基于用户创造性出圈。
+- 推动 TRAE 应用周边生态发展，激发更多好的想法接入 TRAE 周边生态。
+
+在过去这类工具是开发者的专属——你要懂 Swift、懂 macOS API、懂 Xcode 工程化，才能给 Mac 写一个灵动岛小组件。**TRAE FLOW 站在 TRAE 的肩膀上把这件事的门槛降到了零**：提供一个所想即所得的入口，面向更大的用户群体——产品经理、运营、学生、医生、老师、设计师——任何人只要有想法，就能立马让它在屏幕上跑起来。
 
 ## 许可证
 
