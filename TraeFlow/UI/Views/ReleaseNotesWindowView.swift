@@ -70,14 +70,20 @@ struct ReleaseNotesWindowView: View {
         HStack(spacing: 8) {
             Text(notes.currentVersion)
                 .foregroundColor(.white.opacity(0.6))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
 
             Image(systemName: "arrow.right")
                 .foregroundColor(.white.opacity(0.35))
 
             Text(notes.targetVersion)
                 .foregroundColor(.white.opacity(0.92))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
 
             Text("🎉")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .font(.system(size: 14, weight: .semibold, design: .rounded))
         .padding(.horizontal, 16)

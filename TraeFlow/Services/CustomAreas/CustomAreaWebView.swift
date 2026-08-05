@@ -13,6 +13,8 @@ struct CustomAreaWebView: NSViewRepresentable {
     static let hintMessageHandlerName = "traeFlowHint"
     /// JS Bridge 系统指标消息处理器 —— HTML 端通过 `window.webkit.messageHandlers.traeFlowMetrics` 请求指标
     static let metricsMessageHandlerName = "traeFlowMetrics"
+    /// JS Bridge 收起展开面板处理器 —— HTML 端通过 `window.webkit.messageHandlers.traeFlowCollapse.postMessage(...)` 收起 Flow 岛展开面板
+    static let collapseMessageHandlerName = "traeFlowCollapse"
 
     /// WebView 内容源
     enum ContentSource: Equatable {
@@ -116,6 +118,8 @@ struct CustomAreaWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: Self.hintMessageHandlerName)
         // Spec: 注册 JS Bridge —— 系统指标查询通道（HTML 可通过此通道获取真实 CPU/内存/负载数据）
         configuration.userContentController.add(context.coordinator, name: Self.metricsMessageHandlerName)
+        // Spec: 注册 JS Bridge —— 收起 Flow 岛展开面板通道（HTML 通过 postMessage 触发收起）
+        configuration.userContentController.add(context.coordinator, name: Self.collapseMessageHandlerName)
 
         // Spec: mineradio-bridge-compat-layer —— 注入 Bridge user script + 注册 message handler
         if source.isMineradio {
@@ -188,6 +192,7 @@ struct CustomAreaWebView: NSViewRepresentable {
         // 移除旧 handler（释放旧 Coordinator）
         controller.removeScriptMessageHandler(forName: Self.hintMessageHandlerName)
         controller.removeScriptMessageHandler(forName: Self.metricsMessageHandlerName)
+        controller.removeScriptMessageHandler(forName: Self.collapseMessageHandlerName)
         if source.isMineradio {
             controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.apiMessageHandlerName)
             controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.binaryMessageHandlerName)
@@ -196,6 +201,7 @@ struct CustomAreaWebView: NSViewRepresentable {
         // 添加新 handler
         controller.add(context.coordinator, name: Self.hintMessageHandlerName)
         controller.add(context.coordinator, name: Self.metricsMessageHandlerName)
+        controller.add(context.coordinator, name: Self.collapseMessageHandlerName)
         if source.isMineradio {
             controller.add(context.coordinator, name: MineradioBridgeUserScript.apiMessageHandlerName)
             controller.add(context.coordinator, name: MineradioBridgeUserScript.binaryMessageHandlerName)
@@ -519,6 +525,13 @@ struct CustomAreaWebView: NSViewRepresentable {
             // 系统指标查询
             if message.name == CustomAreaWebView.metricsMessageHandlerName {
                 handleMetricsRequest()
+                return
+            }
+
+            // Spec: 收起 Flow 岛展开面板 —— HTML 通过 traeFlowCollapse.postMessage 触发，
+            // 由 Coordinator 发出通知，NotchView 监听后调用 notchClose()。
+            if message.name == CustomAreaWebView.collapseMessageHandlerName {
+                NotificationCenter.default.post(name: .traeFlowCollapseLeftExpanded, object: nil)
                 return
             }
 

@@ -439,11 +439,16 @@ final class CustomAreaStore: ObservableObject {
         return area
     }
 
-    /// 测试 HTML 内容 —— 演示四个真实交互区块（Flow 岛提示 / 外部接口 / localStorage 持久化 / 系统数据监控）。
+    /// 测试 HTML 内容 —— 演示三个真实交互区块（喝水提醒 / 外部接口 / 系统数据监控）。
     /// 深色圆角卡片风格，与 Flow 岛视觉一致。包含 loading spinner、5 秒超时、
     /// 计数器防抖、错误态橙边、成功态绿边、按钮成功反馈、系统指标进度条等交互打磨。
     /// Spec: demo-redesign-2026 —— 重新设计演示页：毛玻璃卡片 + 渐变标题栏 + SF Symbols 风格图标
     /// + 数字滚动动画 + 指标进度条流光效果 + 卡片入场过渡 + 悬停微交互。
+    /// Spec: hint-auto-collapse —— 推送提示后通过 `traeFlowCollapse` bridge 自动收起 Flow 岛展开面板。
+    /// Spec: water-reminder-counter —— localStorage 计数器改为喝水提醒计数器，置于首块。
+    /// Spec: water-reminder-integrated-hint —— 推送提示功能集成进喝水提醒卡片，
+    /// 「喝一杯水 +1」按钮仅计数；「发送提醒（测试）」按钮读取当前计数推送「已喝水 N 杯」提示并自动收起展开面板；
+    /// 「启动定时」按设定间隔（1–240 分钟）自动推送喝水提醒（不收起面板，保持 WebView 存活使定时器持续）。
     private static let testHTMLContent = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -643,6 +648,21 @@ final class CustomAreaStore: ObservableObject {
   }
   .count.bump { transform: scale(1.18); }
   .count-meta { font-size: 10px; color: var(--text-tertiary); margin-top: 6px; text-align: center; }
+  input[type="number"] {
+    height: 30px;
+    width: 64px;
+    padding: 0 8px;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.06);
+    color: #fff;
+    font-size: 12px;
+    font-family: inherit;
+    text-align: center;
+  }
+  input[type="number"]:focus { outline: none; border-color: var(--accent-blue); }
+  .timer-row { display: flex; align-items: center; gap: 8px; padding-left: 34px; margin-top: 10px; }
+  .timer-status { font-size: 11px; color: var(--text-tertiary); }
 
   code {
     background: rgba(255,255,255,0.1);
@@ -715,25 +735,39 @@ final class CustomAreaStore: ObservableObject {
       </div>
       <div class="hero-text">
         <h1>TRAE Flow 自定义功能演示</h1>
-        <p>四个真实交互区块演示，展示 JS Bridge、外部接口、本地持久化与系统监控能力。</p>
+        <p>三个真实交互区块演示：喝水提醒（集成 Flow 岛推送）、外部接口请求、系统数据监控。</p>
       </div>
       <div class="hero-badge">LIVE</div>
     </div>
   </div>
 
-  <!-- 区块 1: 推送提示到 Flow 岛 -->
+  <!-- 区块 1: 喝水提醒（计数 + Flow 岛推送，集成）-->
   <div class="card">
     <div class="card-header">
       <div class="card-icon blue">
-        <svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M12 2C8 6 4 10 4 14c0 4.42 3.58 8 8 8s8-3.58 8-8c0-4-4-8-8-12zm0 18c-3.31 0-6-2.69-6-6 0-3.33 2.67-6.67 6-10 3.33 3.33 6 6.67 6 10 0 3.31-2.69 6-6 6zm-1-5l4-4-1.41-1.41L11 12.17l-1.59-1.59L8 12z"/></svg>
       </div>
-      <div class="card-title">推送提示到 Flow 岛</div>
+      <div class="card-title">喝水提醒</div>
     </div>
-    <div class="card-desc">调用 <code>traeFlowHint.postMessage</code> 向紧凑态 Flow 岛推送限时提示；点击后按钮短暂变绿作为成功反馈。</div>
-    <div class="btn-row">
-      <button class="primary" onclick="sendHint(this, '默认提示 5 秒')">默认 5 秒</button>
-      <button onclick="sendHint(this, '自定义 3 秒', 3000)">自定义 3 秒</button>
-      <button class="danger" onclick="clearHint(this)">清除提示</button>
+    <div class="card-desc">点击「喝一杯水」计数 +1（写入 <code>localStorage.traeFlowWaterCount</code>，连续点击合并写入，刷新后保留）；「发送提醒」测试按钮立即推送一次提示；「启动定时」按设定间隔自动推送喝水提醒。</div>
+    <div class="count-row">
+      <button onclick="changeCount(-1)">−1</button>
+      <div class="count-display">
+        <div id="countView" class="count">0</div>
+        <div id="countMeta" class="count-meta">今天还没喝水</div>
+      </div>
+      <button class="primary" onclick="changeCount(1)">喝一杯水 +1</button>
+      <button class="danger" onclick="resetCount()" style="margin-left:8px;">重置</button>
+    </div>
+    <div class="timer-row">
+      <span class="timer-status">每隔</span>
+      <input type="number" id="waterInterval" min="1" max="240" value="30" />
+      <span class="timer-status">分钟提醒</span>
+      <button id="waterTimerBtn" class="primary" onclick="toggleWaterTimer(this)">启动定时</button>
+      <span id="waterTimerStatus" class="timer-status">未启动</span>
+    </div>
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="primary" onclick="sendWaterReminder(this)">发送提醒（测试）</button>
     </div>
   </div>
 
@@ -753,27 +787,7 @@ final class CustomAreaStore: ObservableObject {
     <div id="fetchOut" class="out muted">点击按钮发起请求。若未开启外部接口将显示提示。</div>
   </div>
 
-  <!-- 区块 3: localStorage 持久化计数器 -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-icon purple">
-        <svg viewBox="0 0 24 24"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm6 16c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2z"/></svg>
-      </div>
-      <div class="card-title">localStorage 持久化计数器</div>
-    </div>
-    <div class="card-desc">读写 <code>localStorage.traeFlowDemoCount</code>，点击 +/- 修改；连续点击会合并写入，刷新页面后保留。</div>
-    <div class="count-row">
-      <button onclick="changeCount(-1)">−1</button>
-      <div class="count-display">
-        <div id="countView" class="count">0</div>
-        <div id="countMeta" class="count-meta">尚未修改</div>
-      </div>
-      <button class="primary" onclick="changeCount(1)">+1</button>
-      <button class="danger" onclick="resetCount()" style="margin-left:8px;">重置</button>
-    </div>
-  </div>
-
-  <!-- 区块 4: 系统数据监控 -->
+  <!-- 区块 3: 系统数据监控 -->
   <div class="card">
     <div class="card-header">
       <div class="card-icon green">
@@ -799,28 +813,67 @@ final class CustomAreaStore: ObservableObject {
   </div>
 
 <script>
-  // ===== 区块 1: Flow 岛提示 =====
-  function flashSuccess(btn) {
-    if (!btn) return;
-    btn.classList.add("success");
-    setTimeout(function () { btn.classList.remove("success"); }, 800);
+  // ===== 区块 1: 喝水提醒（集成 Flow 岛推送 + 自动收起）=====
+  // Spec: hint-auto-collapse —— 推送提示后通过 traeFlowCollapse bridge 自动收起 Flow 岛展开面板。
+  function collapseFlowIsland() {
+    try {
+      window.webkit.messageHandlers.traeFlowCollapse.postMessage({});
+    } catch (e) {}
   }
-  function sendHint(btn, text, duration) {
+  // 向 Flow 岛推送限时提示；autoCollapse=true 时同步收起展开面板（测试按钮用），
+  // false 时仅推送不收起（定时器用，避免收起导致 WebView 回收、定时器中断）。
+  function pushHint(text, duration, autoCollapse) {
     var body = duration != null
       ? { text: text, duration: duration }
       : { text: text };
     try {
       window.webkit.messageHandlers.traeFlowHint.postMessage(body);
-      flashSuccess(btn);
+      if (autoCollapse) collapseFlowIsland();
     } catch (e) {
       document.title = "bridge-error: " + e.message;
     }
   }
-  function clearHint(btn) {
-    try {
-      window.webkit.messageHandlers.traeFlowHint.postMessage({ action: "clear" });
-      flashSuccess(btn);
-    } catch (e) {}
+  // 发送喝水提醒到 Flow 岛（测试按钮）：推送「已喝水 N 杯」提示 + 收起展开面板（不修改计数）
+  function sendWaterReminder(btn) {
+    var n = readCount();
+    pushHint("已喝水 " + n + " 杯，继续保持", 4000, true);
+    if (btn) {
+      btn.classList.add("success");
+      setTimeout(function () { btn.classList.remove("success"); }, 800);
+    }
+  }
+  // ===== 区块 1: 喝水定时提醒 =====
+  // Spec: water-timer —— 可设置间隔（分钟）自动推送喝水提醒。
+  // 注意：定时器依赖 WKWebView 存活，Flow 岛收起后 WebView 可能被回收导致定时停止，
+  // 需保持展开面板或自定义区域保活才可持续。
+  var waterTimer = null;
+  function toggleWaterTimer(btn) {
+    if (waterTimer) {
+      clearInterval(waterTimer);
+      waterTimer = null;
+      btn.textContent = "启动定时";
+      btn.classList.remove("danger");
+      btn.classList.add("primary");
+      document.getElementById("waterTimerStatus").textContent = "未启动";
+    } else {
+      var input = document.getElementById("waterInterval");
+      var minutes = parseInt(input.value, 10);
+      if (isNaN(minutes) || minutes < 1) minutes = 1;
+      if (minutes > 240) minutes = 240;
+      input.value = minutes;
+      var ms = minutes * 60 * 1000;
+      // 立即推送一次（不收起面板，保持 WebView 存活使定时器持续），随后按间隔重复
+      var tick = function () {
+        var n = readCount();
+        pushHint("喝水时间到，已喝水 " + n + " 杯，记得补充水分", 4000, false);
+      };
+      tick();
+      waterTimer = setInterval(tick, ms);
+      btn.textContent = "停止定时";
+      btn.classList.remove("primary");
+      btn.classList.add("danger");
+      document.getElementById("waterTimerStatus").textContent = "每 " + minutes + " 分钟提醒中";
+    }
   }
 
   // ===== 区块 2: 外部接口 =====
@@ -864,9 +917,9 @@ final class CustomAreaStore: ObservableObject {
     out.textContent = "已清空。";
   }
 
-  // ===== 区块 3: localStorage 计数器 =====
-  var COUNT_KEY = "traeFlowDemoCount";
-  var COUNT_META_KEY = "traeFlowDemoCountUpdatedAt";
+  // ===== 区块 1: 喝水提醒计数器（localStorage 持久化，由 drinkWater 调用）=====
+  var COUNT_KEY = "traeFlowWaterCount";
+  var COUNT_META_KEY = "traeFlowWaterCountUpdatedAt";
   var writeTimer = null;
   function readCount() {
     var raw = localStorage.getItem(COUNT_KEY);
@@ -881,12 +934,12 @@ final class CustomAreaStore: ObservableObject {
   }
   function renderCountMeta(ts) {
     var meta = document.getElementById("countMeta");
-    if (!ts) { meta.textContent = "尚未修改"; return; }
+    if (!ts) { meta.textContent = "今天还没喝水"; return; }
     var d = new Date(ts);
     var hh = String(d.getHours()).padStart(2, "0");
     var mm = String(d.getMinutes()).padStart(2, "0");
     var ss = String(d.getSeconds()).padStart(2, "0");
-    meta.textContent = "上次更新 " + hh + ":" + mm + ":" + ss;
+    meta.textContent = "上次喝水 " + hh + ":" + mm + ":" + ss;
   }
   function scheduleWrite(n, ts) {
     if (writeTimer) clearTimeout(writeTimer);

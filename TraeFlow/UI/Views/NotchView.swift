@@ -517,6 +517,9 @@ struct NotchView: View {
             .onReceive(NotificationCenter.default.publisher(for: .traeFlowHookWalkthroughDemoShouldCloseNotch)) { _ in
                 closeDockedNotchForHookWalkthroughDemo()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .traeFlowCollapseLeftExpanded)) { _ in
+                collapseLeftExpandedPanel()
+            }
             .onPreferenceChange(OpenedPanelContentHeightPreferenceKey.self) { height in
                 guard viewModel.status == .opened else {
                     viewModel.updateOpenedMeasuredHeight(nil)
@@ -541,6 +544,19 @@ struct NotchView: View {
         guard settings.surfaceMode == .notch else { return }
         guard viewModel.presentationMode == .docked else { return }
         guard viewModel.status == .opened else { return }
+
+        withAnimation(viewModel.animation) {
+            viewModel.notchClose()
+        }
+    }
+
+    /// Spec: 自定义 HTML 区域请求收起 Flow 岛展开面板 ——
+    /// 由 `traeFlowCollapse` JS Bridge → `traeFlowCollapseLeftExpanded` 通知触发。
+    /// 仅收起 docked 展开态（customExpanded），不影响分离态。
+    private func collapseLeftExpandedPanel() {
+        guard viewModel.presentationMode == .docked else { return }
+        guard viewModel.status == .opened else { return }
+        guard case .customExpanded = viewModel.contentType else { return }
 
         withAnimation(viewModel.animation) {
             viewModel.notchClose()

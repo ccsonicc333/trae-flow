@@ -26,5 +26,9 @@ Package.resolved
 *.log
 trae-work-docs/
 
+# LLVM profiling output
+default.profraw
+*.profraw
+
 # Override global *.zip ignore for bundled resources
 !TraeFlow/Resources/MediaRemoteAdapter.zip

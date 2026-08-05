@@ -8,6 +8,8 @@ extension Notification.Name {
     static let traeFlowPresentNotchDetachmentHint = Notification.Name("traeFlowPresentNotchDetachmentHint")
     /// 左侧功能快捷展开；userInfo["featureID"] 为目标 LeftFeature.id
     static let traeFlowExpandLeftFeature = Notification.Name("traeFlowExpandLeftFeature")
+    /// 自定义 HTML 区域请求收起 Flow 岛展开面板（HTML 通过 traeFlowCollapse bridge 触发）
+    static let traeFlowCollapseLeftExpanded = Notification.Name("traeFlowCollapseLeftExpanded")
 }
 
 @MainActor
