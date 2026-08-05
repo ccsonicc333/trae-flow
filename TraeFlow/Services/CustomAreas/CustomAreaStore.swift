@@ -442,6 +442,8 @@ final class CustomAreaStore: ObservableObject {
     /// 测试 HTML 内容 —— 演示四个真实交互区块（Flow 岛提示 / 外部接口 / localStorage 持久化 / 系统数据监控）。
     /// 深色圆角卡片风格，与 Flow 岛视觉一致。包含 loading spinner、5 秒超时、
     /// 计数器防抖、错误态橙边、成功态绿边、按钮成功反馈、系统指标进度条等交互打磨。
+    /// Spec: demo-redesign-2026 —— 重新设计演示页：毛玻璃卡片 + 渐变标题栏 + SF Symbols 风格图标
+    /// + 数字滚动动画 + 指标进度条流光效果 + 卡片入场过渡 + 悬停微交互。
     private static let testHTMLContent = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -451,124 +453,282 @@ final class CustomAreaStore: ObservableObject {
 <title>TRAE Flow 自定义功能演示</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg-glow: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(0,122,255,0.18), transparent 70%);
+    --card-bg: rgba(255,255,255,0.05);
+    --card-bg-hover: rgba(255,255,255,0.08);
+    --card-border: rgba(255,255,255,0.09);
+    --card-border-hover: rgba(255,255,255,0.16);
+    --accent-blue: #0a84ff;
+    --accent-green: #30d158;
+    --accent-orange: #ff9f0a;
+    --accent-red: #ff453a;
+    --accent-cyan: #64d2ff;
+    --accent-purple: #bf5af2;
+    --text-primary: #fff;
+    --text-secondary: rgba(255,255,255,0.55);
+    --text-tertiary: rgba(255,255,255,0.35);
+  }
   body {
     font-family: -apple-system, "PingFang SC", sans-serif;
     background: transparent;
-    color: #fff;
-    padding: 20px;
+    color: var(--text-primary);
+    padding: 18px 20px 20px;
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    position: relative;
   }
-  .header {
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: var(--bg-glow);
+    pointer-events: none;
+    z-index: 0;
   }
-  .header h1 { font-size: 17px; font-weight: 600; }
-  .header p { font-size: 12px; color: rgba(255,255,255,0.55); margin-top: 4px; line-height: 1.5; }
+  body > * { position: relative; z-index: 1; }
+
+  /* ===== Hero Header ===== */
+  .hero {
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(10,132,255,0.14), rgba(191,90,242,0.08));
+    border: 1px solid rgba(10,132,255,0.22);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::after {
+    content: "";
+    position: absolute;
+    top: -50%; right: -20%;
+    width: 60%; height: 200%;
+    background: radial-gradient(circle, rgba(100,210,255,0.12), transparent 60%);
+    pointer-events: none;
+  }
+  .hero-row { display: flex; align-items: center; gap: 12px; position: relative; }
+  .hero-logo {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 4px 14px rgba(10,132,255,0.35);
+  }
+  .hero-logo svg { width: 20px; height: 20px; fill: #fff; }
+  .hero-text { flex: 1; min-width: 0; }
+  .hero h1 {
+    font-size: 16px; font-weight: 700;
+    background: linear-gradient(90deg, #fff, rgba(255,255,255,0.85));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p { font-size: 11px; color: var(--text-secondary); margin-top: 3px; line-height: 1.45; }
+  .hero-badge {
+    font-size: 9px; font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: rgba(48,209,88,0.18);
+    color: var(--accent-green);
+    border: 1px solid rgba(48,209,88,0.3);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+
+  /* ===== Card ===== */
   .card {
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.1);
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
     border-radius: 14px;
-    padding: 16px 18px;
-    margin-bottom: 14px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    transition: background 0.2s, border-color 0.2s, transform 0.15s;
+    animation: cardIn 0.4s ease backwards;
   }
-  .card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-  .card-desc { font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 10px; line-height: 1.45; }
-  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .card:nth-child(2) { animation-delay: 0.05s; }
+  .card:nth-child(3) { animation-delay: 0.1s; }
+  .card:nth-child(4) { animation-delay: 0.15s; }
+  .card:nth-child(5) { animation-delay: 0.2s; }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .card:hover { background: var(--card-bg-hover); border-color: var(--card-border-hover); }
+  .card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .card-icon {
+    width: 24px; height: 24px;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .card-icon svg { width: 14px; height: 14px; }
+  .card-icon.blue { background: rgba(10,132,255,0.18); color: var(--accent-blue); }
+  .card-icon.blue svg { fill: var(--accent-blue); }
+  .card-icon.cyan { background: rgba(100,210,255,0.18); color: var(--accent-cyan); }
+  .card-icon.cyan svg { fill: var(--accent-cyan); }
+  .card-icon.purple { background: rgba(191,90,242,0.18); color: var(--accent-purple); }
+  .card-icon.purple svg { fill: var(--accent-purple); }
+  .card-icon.green { background: rgba(48,209,88,0.18); color: var(--accent-green); }
+  .card-icon.green svg { fill: var(--accent-green); }
+  .card-title { font-size: 13px; font-weight: 600; flex: 1; }
+  .card-desc { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.5; padding-left: 34px; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 7px; padding-left: 34px; }
   button {
-    height: 32px;
-    padding: 0 14px;
-    line-height: 32px;
-    border: 1px solid rgba(255,255,255,0.18);
+    height: 30px;
+    padding: 0 13px;
+    line-height: 30px;
+    border: 1px solid rgba(255,255,255,0.14);
     border-radius: 8px;
-    background: rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.06);
     color: #fff;
     font-size: 12px;
+    font-weight: 500;
     cursor: pointer;
-    transition: background 0.15s, transform 0.05s, box-shadow 0.15s, border-color 0.15s;
+    transition: background 0.15s, transform 0.08s, box-shadow 0.15s, border-color 0.15s;
+    display: inline-flex; align-items: center; gap: 5px;
   }
-  button:hover { background: rgba(255,255,255,0.16); box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
-  button:active { transform: scale(0.97); }
-  button.primary { background: rgba(0,122,255,0.32); border-color: rgba(0,122,255,0.55); }
-  button.primary:hover { background: rgba(0,122,255,0.48); }
-  button.danger { background: rgba(255,69,58,0.25); border-color: rgba(255,69,58,0.5); }
-  button.danger:hover { background: rgba(255,69,58,0.4); }
-  button.success { background: rgba(48,209,63,0.32); border-color: rgba(48,209,63,0.55); }
-  button.success:hover { background: rgba(48,209,63,0.48); }
+  button:hover { background: rgba(255,255,255,0.14); box-shadow: 0 2px 10px rgba(0,0,0,0.25); }
+  button:active { transform: scale(0.96); }
+  button.primary { background: rgba(10,132,255,0.28); border-color: rgba(10,132,255,0.5); }
+  button.primary:hover { background: rgba(10,132,255,0.42); box-shadow: 0 2px 12px rgba(10,132,255,0.3); }
+  button.danger { background: rgba(255,69,58,0.22); border-color: rgba(255,69,58,0.45); }
+  button.danger:hover { background: rgba(255,69,58,0.36); }
+  button.success { background: rgba(48,209,88,0.3); border-color: rgba(48,209,88,0.5); }
+  button.success:hover { background: rgba(48,209,88,0.44); }
+
   .out {
     margin-top: 10px;
-    padding: 10px;
-    background: rgba(0,0,0,0.25);
-    border: 1px solid rgba(255,255,255,0.08);
+    margin-left: 34px;
+    padding: 9px 11px;
+    background: rgba(0,0,0,0.28);
+    border: 1px solid rgba(255,255,255,0.07);
     border-radius: 8px;
     font-family: "SF Mono", ui-monospace, monospace;
     font-size: 11px;
-    color: rgba(255,255,255,0.85);
+    color: rgba(255,255,255,0.82);
     white-space: pre-wrap;
     word-break: break-all;
-    min-height: 40px;
+    min-height: 38px;
+    transition: border-color 0.3s;
   }
   .out.error { border-color: rgba(255,159,10,0.5); }
-  .out.success { border-color: rgba(48,209,63,0.5); }
+  .out.success { border-color: rgba(48,209,88,0.5); }
   .out.with-icon { display: flex; align-items: center; gap: 8px; }
-  .count {
-    font-size: 22px;
-    font-weight: 700;
-    color: #fff;
-    margin: 0 12px;
-    min-width: 32px;
-    text-align: center;
+
+  /* ===== Counter ===== */
+  .count-row {
+    display: flex; align-items: center;
+    padding-left: 34px;
   }
-  .count-row { display: flex; align-items: center; }
-  .count-meta { margin-top: 8px; font-size: 10px; color: rgba(255,255,255,0.45); }
+  .count-display {
+    display: flex; flex-direction: column; align-items: center;
+    margin: 0 14px;
+    min-width: 56px;
+  }
+  .count {
+    font-size: 28px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #fff;
+    line-height: 1;
+    background: linear-gradient(180deg, #fff, rgba(255,255,255,0.7));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .count.bump { transform: scale(1.18); }
+  .count-meta { font-size: 10px; color: var(--text-tertiary); margin-top: 6px; text-align: center; }
+
   code {
     background: rgba(255,255,255,0.1);
     padding: 1px 5px;
     border-radius: 4px;
     font-size: 10px;
+    font-family: "SF Mono", ui-monospace, monospace;
   }
-  .muted { color: rgba(255,255,255,0.45); }
+  .muted { color: var(--text-tertiary); }
   .spinner {
     display: inline-block;
     width: 12px;
     height: 12px;
-    border: 2px solid rgba(255,255,255,0.25);
-    border-top-color: rgba(255,255,255,0.85);
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: var(--accent-blue);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
     flex-shrink: 0;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* ===== 区块 4: 系统数据监控 ===== */
-  .metric { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+  /* ===== Metrics ===== */
+  .metrics-grid { padding-left: 34px; }
+  .metric { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
   .metric:last-child { margin-bottom: 0; }
   .metric-label {
-    font-size: 11px; color: rgba(255,255,255,0.5);
-    text-transform: uppercase; letter-spacing: 0.5px;
+    font-size: 10px; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.6px;
     display: flex; justify-content: space-between; align-items: baseline;
   }
-  .metric-label .val { font-size: 13px; font-weight: 600; color: #fff; text-transform: none; letter-spacing: 0; }
-  .metric-bar {
-    height: 4px; background: rgba(255,255,255,0.08);
-    border-radius: 2px; overflow: hidden;
+  .metric-label .val {
+    font-size: 13px; font-weight: 700; color: #fff;
+    text-transform: none; letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
   }
-  .metric-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
+  .metric-bar {
+    height: 5px; background: rgba(255,255,255,0.06);
+    border-radius: 3px; overflow: hidden;
+    position: relative;
+  }
+  .metric-fill {
+    height: 100%; border-radius: 3px;
+    transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+  }
+  .metric-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+    animation: shimmer 2s infinite;
+  }
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
   .metric-fill.cpu { background: linear-gradient(90deg, #ff6b6b, #ff8e53); }
   .metric-fill.mem { background: linear-gradient(90deg, #4dd0e1, #26c6da); }
-  .metric-sub { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 2px; }
+  .metric-sub { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; font-variant-numeric: tabular-nums; }
   .metric-pending { opacity: 0.4; }
 </style>
 </head>
 <body>
-  <div class="header">
-    <h1>TRAE Flow 自定义功能演示页</h1>
-    <p>四个真实交互区块：Flow 岛提示、外部接口请求、本地计数器持久化、系统数据监控。</p>
+  <!-- Hero Header -->
+  <div class="hero">
+    <div class="hero-row">
+      <div class="hero-logo">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 7.5L4.5 6 12 3.5 19.5 6 12 9.5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <div class="hero-text">
+        <h1>TRAE Flow 自定义功能演示</h1>
+        <p>四个真实交互区块演示，展示 JS Bridge、外部接口、本地持久化与系统监控能力。</p>
+      </div>
+      <div class="hero-badge">LIVE</div>
+    </div>
   </div>
 
   <!-- 区块 1: 推送提示到 Flow 岛 -->
   <div class="card">
-    <div class="card-title">推送提示到 Flow 岛</div>
+    <div class="card-header">
+      <div class="card-icon blue">
+        <svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+      </div>
+      <div class="card-title">推送提示到 Flow 岛</div>
+    </div>
     <div class="card-desc">调用 <code>traeFlowHint.postMessage</code> 向紧凑态 Flow 岛推送限时提示；点击后按钮短暂变绿作为成功反馈。</div>
     <div class="btn-row">
       <button class="primary" onclick="sendHint(this, '默认提示 5 秒')">默认 5 秒</button>
@@ -579,7 +739,12 @@ final class CustomAreaStore: ObservableObject {
 
   <!-- 区块 2: 调用外部接口 -->
   <div class="card">
-    <div class="card-title">调用外部接口</div>
+    <div class="card-header">
+      <div class="card-icon cyan">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+      </div>
+      <div class="card-title">调用外部接口</div>
+    </div>
     <div class="card-desc">fetch 公开 API <code>https://api.github.com/repos/apple/swift</code> 并渲染返回 JSON 片段；5 秒超时，加载中显示 spinner。</div>
     <div class="btn-row">
       <button class="primary" onclick="fetchGitHub()">请求 GitHub API</button>
@@ -590,38 +755,51 @@ final class CustomAreaStore: ObservableObject {
 
   <!-- 区块 3: localStorage 持久化计数器 -->
   <div class="card">
-    <div class="card-title">localStorage 持久化计数器</div>
+    <div class="card-header">
+      <div class="card-icon purple">
+        <svg viewBox="0 0 24 24"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm6 16c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2z"/></svg>
+      </div>
+      <div class="card-title">localStorage 持久化计数器</div>
+    </div>
     <div class="card-desc">读写 <code>localStorage.traeFlowDemoCount</code>，点击 +/- 修改；连续点击会合并写入，刷新页面后保留。</div>
     <div class="count-row">
-      <button onclick="changeCount(-1)">-1</button>
-      <div id="countView" class="count">0</div>
+      <button onclick="changeCount(-1)">−1</button>
+      <div class="count-display">
+        <div id="countView" class="count">0</div>
+        <div id="countMeta" class="count-meta">尚未修改</div>
+      </div>
       <button class="primary" onclick="changeCount(1)">+1</button>
       <button class="danger" onclick="resetCount()" style="margin-left:8px;">重置</button>
     </div>
-    <div id="countMeta" class="count-meta">尚未修改</div>
   </div>
 
   <!-- 区块 4: 系统数据监控 -->
   <div class="card">
-    <div class="card-title">系统数据监控</div>
+    <div class="card-header">
+      <div class="card-icon green">
+        <svg viewBox="0 0 24 24"><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>
+      </div>
+      <div class="card-title">系统数据监控</div>
+    </div>
     <div class="card-desc">通过 <code>traeFlowMetrics</code> JS Bridge 每 2 秒获取真实系统指标：CPU 使用率、内存、负载均值、逻辑核心数。</div>
-    <div class="metric">
-      <div class="metric-label"><span>CPU</span><span class="val" id="cpuValue">--</span></div>
-      <div class="metric-bar"><div class="metric-fill cpu" id="cpuBar" style="width:0%"></div></div>
-    </div>
-    <div class="metric">
-      <div class="metric-label"><span>内存</span><span class="val" id="memValue">--</span></div>
-      <div class="metric-bar"><div class="metric-fill mem" id="memBar" style="width:0%"></div></div>
-      <div class="metric-sub" id="memDetail"></div>
-    </div>
-    <div class="metric">
-      <div class="metric-label"><span>负载</span><span class="val metric-pending" id="loadValue">等待数据...</span></div>
+    <div class="metrics-grid">
+      <div class="metric">
+        <div class="metric-label"><span>CPU</span><span class="val" id="cpuValue">--</span></div>
+        <div class="metric-bar"><div class="metric-fill cpu" id="cpuBar" style="width:0%"></div></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label"><span>内存</span><span class="val" id="memValue">--</span></div>
+        <div class="metric-bar"><div class="metric-fill mem" id="memBar" style="width:0%"></div></div>
+        <div class="metric-sub" id="memDetail"></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label"><span>负载</span><span class="val metric-pending" id="loadValue">等待数据...</span></div>
+      </div>
     </div>
   </div>
 
 <script>
   // ===== 区块 1: Flow 岛提示 =====
-  // 调用后给按钮临时加 .success 类 800ms 作为成功反馈
   function flashSuccess(btn) {
     if (!btn) return;
     btn.classList.add("success");
@@ -646,7 +824,6 @@ final class CustomAreaStore: ObservableObject {
   }
 
   // ===== 区块 2: 外部接口 =====
-  // 用 Promise.race 实现 5 秒超时
   function fetchWithTimeout(url, ms) {
     return Promise.race([
       fetch(url),
@@ -674,7 +851,6 @@ final class CustomAreaStore: ObservableObject {
         };
         out.className = "out success";
         out.textContent = JSON.stringify(slice, null, 2);
-        // 1.5 秒后移除成功边框
         setTimeout(function () { out.classList.remove("success"); }, 1500);
       })
       .catch(function (err) {
@@ -689,7 +865,6 @@ final class CustomAreaStore: ObservableObject {
   }
 
   // ===== 区块 3: localStorage 计数器 =====
-  // 防抖：UI 立即更新，localStorage 写入合并到 300ms 内
   var COUNT_KEY = "traeFlowDemoCount";
   var COUNT_META_KEY = "traeFlowDemoCountUpdatedAt";
   var writeTimer = null;
@@ -699,7 +874,10 @@ final class CustomAreaStore: ObservableObject {
     return isNaN(n) ? 0 : n;
   }
   function renderCount(n) {
-    document.getElementById("countView").textContent = String(n);
+    var el = document.getElementById("countView");
+    el.textContent = String(n);
+    el.classList.add("bump");
+    setTimeout(function () { el.classList.remove("bump"); }, 220);
   }
   function renderCountMeta(ts) {
     var meta = document.getElementById("countMeta");
@@ -708,7 +886,7 @@ final class CustomAreaStore: ObservableObject {
     var hh = String(d.getHours()).padStart(2, "0");
     var mm = String(d.getMinutes()).padStart(2, "0");
     var ss = String(d.getSeconds()).padStart(2, "0");
-    meta.textContent = "上次更新：" + hh + ":" + mm + ":" + ss;
+    meta.textContent = "上次更新 " + hh + ":" + mm + ":" + ss;
   }
   function scheduleWrite(n, ts) {
     if (writeTimer) clearTimeout(writeTimer);
@@ -731,7 +909,6 @@ final class CustomAreaStore: ObservableObject {
     renderCountMeta(now);
     scheduleWrite(0, now);
   }
-  // 初始化渲染
   (function init() {
     renderCount(readCount());
     var ts = parseInt(localStorage.getItem(COUNT_META_KEY), 10);
@@ -739,7 +916,6 @@ final class CustomAreaStore: ObservableObject {
   })();
 
   // ===== 区块 4: 系统数据监控 =====
-  // 通过 traeFlowMetrics bridge 每 2 秒获取真实系统指标
   function formatBytes(bytes) {
     if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
     return (bytes / 1048576).toFixed(0) + ' MB';

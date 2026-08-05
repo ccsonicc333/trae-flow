@@ -194,7 +194,8 @@ final class LeftFeatureStore: ObservableObject {
                 kind: .music,
                 isEnabled: true,
                 sortOrder: 1,
-                expandedHeight: 280
+                expandedWidth: 670,
+                expandedHeight: 360
             ),
             LeftFeature(
                 id: LeftFeature.shelfID,
