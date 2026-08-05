@@ -61,11 +61,11 @@ final class CustomAreaStore: ObservableObject {
     // MARK: - Built-in Areas Bootstrap
 
     /// Spec: 首次启动时确保运行时目录就绪，并注入默认自定义功能预设。
-    /// 当前仅保留「TRAE Flow 演示」一个预设，以 isBuiltIn=false 写入，用户可自行删除。
+    /// 当前仅保留「TRAE Flow 自定义功能演示」一个预设，以 isBuiltIn=false 写入，用户可自行删除。
     ///
     /// 注意：此方法不再在 `init` 中自动调用。必须在 `LeftFeatureStore` 初始化完成后显式调用，
     /// 否则 `seedDefaultCustomArea` 中 `appendCustomAreaFeature(areaID:isEnabled:)` 追加的
-    /// LeftFeature（如 demo 默认不启用）会被 `migrateFromLegacy()` 覆盖。
+    /// LeftFeature 会被 `migrateFromLegacy()` 覆盖。
     func bootstrapBuiltInAreasIfNeeded() {
         BridgeRuntimePaths.prepareRuntimeDirectory()
         bootstrapDefaultCustomAreasIfNeeded()
@@ -78,23 +78,22 @@ final class CustomAreaStore: ObservableObject {
         guard !defaults.bool(forKey: defaultsKey) else { return }
         defaults.set(true, forKey: defaultsKey)
 
-        // 预设 1：TRAE Flow 演示页（图标文字「演示」，允许外部接口）
-        // Spec: demo-preset-default-disabled —— 演示页默认不启用，避免打扰新用户
+        // 预设 1：TRAE Flow 自定义功能演示页（图标文字「演示」，允许外部接口）
+        // Spec: demo-preset-default-enabled —— 演示页默认启用，配合音乐/中转站作为开箱即用的功能展示
         // Spec: upgrade-demo-html-to-four-blocks —— 使用四个真实交互区块 HTML（testHTMLContent）
         _ = seedDefaultCustomArea(
             directoryName: "trae-flow-demo",
-            name: "TRAE Flow 演示",
+            name: "TRAE Flow 自定义功能演示",
             iconName: "text:演示",
             allowsNetworkAccess: true,
             htmlContent: Self.testHTMLContent,
-            defaultEnabled: false
+            defaultEnabled: true
         )
     }
 
     /// 写入默认预设目录与 index.html，并添加 area 记录（isBuiltIn=false，用户可删除）。
     /// 若同名目录已存在则跳过写入；若已存在同名 area 则跳过添加。
-    /// `defaultEnabled` 控制对应 LeftFeature 的初始启用状态（默认 true；
-    /// 「TRAE Flow 演示」预设传 false 使其默认不启用，避免打扰新用户）。
+    /// `defaultEnabled` 控制对应 LeftFeature 的初始启用状态（默认 true）。
     @discardableResult
     private func seedDefaultCustomArea(
         directoryName: String,
@@ -143,7 +142,7 @@ final class CustomAreaStore: ObservableObject {
 
     // MARK: - Default Custom Area HTML Contents
 
-    /// 默认预设 1 的旧版 TRAE Flow 演示页 —— 三个真实交互区块（Flow 岛提示 / 外部接口 / localStorage 持久化）。
+    /// 默认预设 1 的旧版 TRAE Flow 自定义功能演示页 —— 三个真实交互区块（Flow 岛提示 / 外部接口 / localStorage 持久化）。
     /// 当前内置预设已改用 `testHTMLContent`（四个真实交互区块，含系统数据监控），
     /// 本常量保留以兼容可能引用它的其他代码。
     private static let defaultDemoHTMLContent = """
@@ -152,7 +151,7 @@ final class CustomAreaStore: ObservableObject {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TRAE Flow 演示</title>
+<title>TRAE Flow 自定义功能演示</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -247,7 +246,7 @@ final class CustomAreaStore: ObservableObject {
 </head>
 <body>
   <div class="header">
-    <h1>TRAE Flow 演示页</h1>
+    <h1>TRAE Flow 自定义功能演示页</h1>
     <p>三个真实交互区块：Flow 岛提示、外部接口请求、本地计数器持久化。</p>
   </div>
 
@@ -449,7 +448,7 @@ final class CustomAreaStore: ObservableObject {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TRAE Flow 演示</title>
+<title>TRAE Flow 自定义功能演示</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -563,7 +562,7 @@ final class CustomAreaStore: ObservableObject {
 </head>
 <body>
   <div class="header">
-    <h1>TRAE Flow 演示页</h1>
+    <h1>TRAE Flow 自定义功能演示页</h1>
     <p>四个真实交互区块：Flow 岛提示、外部接口请求、本地计数器持久化、系统数据监控。</p>
   </div>
 

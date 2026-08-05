@@ -882,13 +882,16 @@ struct NotchView: View {
 
     /// Spec: 紧凑态左半区功能分发 —— 根据 `LeftFeatureKind` 渲染对应紧凑态视图。
     /// 自定义 HTML 区域若关联目录已被删除则回退到占位视图。
+    /// Spec: compact-icon-only-builtins —— 内置功能（音乐 / 中转站 / NewsNow / AI 热搜 webURL）
+    ///       紧凑态仅显示对应图标，不渲染完整紧凑视图；Mineradio 仍渲染歌词/标题紧凑视图；
+    ///       用户自定义 HTML 区域（customArea）仍渲染完整 WebView。
     @ViewBuilder
     private func compactFeatureView(for feature: LeftFeature) -> some View {
         switch feature.kind {
-        case .music:
-            MusicCompactView()
-        case .shelf:
-            ShelfCompactView()
+        case .music, .shelf, .newsnow, .webURL:
+            // 内置功能紧凑态仅显示图标
+            FeatureIconView(feature: feature, size: 14)
+                .frame(width: 24, height: 24)
         case .customArea(let areaID):
             if let area = customAreaStore.areas.first(where: { $0.id == areaID }) {
                 CustomAreaWebView(source: .localArea(area))
@@ -896,17 +899,6 @@ struct NotchView: View {
             } else {
                 placeholderContent
             }
-        case .webURL(let urlString):
-            // Spec: 远程 URL 功能紧凑态 —— 构造 .remoteURL 源传入 CustomAreaWebView，
-            // frame/clip 与 .customArea 分支保持一致（高度由父级 compactLeftHeight 约束）
-            if let url = URL(string: urlString) {
-                CustomAreaWebView(source: .remoteURL(url))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-            } else {
-                placeholderContent
-            }
-        case .newsnow:
-            NewsNowCompactView()
         case .mineradio:
             MineradioCompactView()
         }
@@ -920,7 +912,14 @@ struct NotchView: View {
     }
 
     private var closedTrailingWidth: CGFloat {
-        sideWidth
+        // Spec: 外接屏 / 低 compactLeftHeight 场景下，宠物右侧任务计数数字需要预留宽度，
+        // 否则会因为 sideWidth 仅容纳宠物图标而把数字裁掉。
+        // 数字宽度按 11pt 字号估算（单字符 ≈ 7pt，2 位数 ≈ 14pt）+ HStack spacing 3 + trailing padding 4。
+        let activeCount = countedClosedSessions.count
+        let badgeWidth: CGFloat = activeCount > 0
+            ? CGFloat("\(activeCount)".count) * 7 + 3 + 4
+            : 0
+        return sideWidth + badgeWidth
     }
 
     private var closedCenterWidth: CGFloat {

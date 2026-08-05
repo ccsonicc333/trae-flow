@@ -35,7 +35,6 @@
 
 > 从「看岛」到「造岛」——每个人都能造出不一样的岛，每个人都是自己产品的产品经理。
 
-
 ## 三条主线
 
 TRAE FLOW 的三条主线对应三种 TRAE 能力和三个用户动作：
@@ -46,7 +45,7 @@ TRAE FLOW 的三条主线对应三种 TRAE 能力和三个用户动作：
 
 ### 2. VibeCoding 任意组件上岛
 
-左侧功能岛完全开放：内置音乐控制、文件中转站、新闻热搜集合，更支持把本地 HTML 目录或任意远程网页直接渲染进灵动岛。通过 `traeFlowHint` JS Bridge，网页还能向灵动岛上推送提示或内容；文件改动通过 FSEvents 实时刷新。**你可以用 TRAE 写一个小组件，下一秒它就出现在你的岛上。**
+左侧功能岛完全开放：内置音乐控制、文件中转站、新闻热搜集合，更支持把本地 HTML 目录或任意远程网页直接渲染进灵动岛。通过 `traeFlowHint` JS Bridge，网页还能向灵动岛上推送提示或内容；文件改动通过 FSEvents 实时刷新。**你可以用 TRAE 写一个小组件，加到 FLOW 后下一秒它就出现在你的岛上。**
 
 ### 3. TRAE Work Design 一键创建电子宠物上岛
 
@@ -85,16 +84,16 @@ TRAE FLOW 的三条主线对应三种 TRAE 能力和三个用户动作：
 
 ## 支持的变体
 
-| 变体           | Bundle ID           | URL Scheme   | 官方 Hook 配置路径                          | Profile ID     |
-| ------------ | ------------------- | ------------ | -------------------------------------- | -------------- |
-| TRAE         | `com.trae.app`      | `trae://`    | `~/.trae/hooks.json`                   | `trae`         |
-| TRAE CN      | `cn.trae.app`       | `trae-cn://` | `~/.trae-cn/hooks.json`                | `trae-cn`      |
-| TRAE WORK    | `com.trae.solo.app` | `solo://`    | `~/.trae-solo/hooks.json`（实验性）         | `trae-work`    |
-| TRAE WORK CN | `cn.trae.solo.app`  | `solo-cn://` | `~/.trae-solo-cn/hooks.json`（实验性）      | `trae-work-cn` |
+| 变体           | Bundle ID           | URL Scheme   | 官方 Hook 配置路径                      | Profile ID     |
+| ------------ | ------------------- | ------------ | --------------------------------- | -------------- |
+| TRAE         | `com.trae.app`      | `trae://`    | `~/.trae/hooks.json`              | `trae`         |
+| TRAE CN      | `cn.trae.app`       | `trae-cn://` | `~/.trae-cn/hooks.json`           | `trae-cn`      |
+| TRAE WORK    | `com.trae.solo.app` | `solo://`    | `~/.trae-solo/hooks.json`（实验性）    | `trae-work`    |
+| TRAE WORK CN | `cn.trae.solo.app`  | `solo-cn://` | `~/.trae-solo-cn/hooks.json`（实验性） | `trae-work-cn` |
 
-TRAE 和 TRAE CN 通过 Trae 官方 Hook 协议提供完整事件流支持。**调试中发现 TRAE WORK 系列虽未在设置界面暴露 Hook 入口，但实际可读取 hooks 配置**，TRAE FLOW 已为其预留配置路径与变体路由作为实验性支持，稳定性以 IDE 系列为主。
-
-Bridge 通过 `--variant <value>` 命令行参数区分变体事件来源，因为 Trae 官方 Hook 的 stdin JSON 不包含 variant 字段。
+TRAE 和 TRAE CN 通过 Trae 官方 Hook 协议提供完整事件流支持。**调试中发现 TRAE WORK 系列虽未在设置界面暴露 Hook 入口，但实际可读取 hooks 配置**，TRAE FLOW 已为其预留配置路径与变体路由作为实验性支持，稳定性以 IDE 系列为主。\
+需要在设置中启用Hooks。
+![alt text](docs/images/trae-flow-hooks-on.png)
 
 ## Flow 岛布局
 
@@ -140,7 +139,6 @@ Bridge 通过 `--variant <value>` 命令行参数区分变体事件来源，因�
 
 ![alt text](docs/images/trae-flow-mineradio.gif)
 
-
 ![alt text](docs/images/trae-flow-html-url-demo.png)
 
 - **JS Bridge**：HTML 页面可调用 `window.webkit.messageHandlers.traeFlowHint.postMessage()` 向紧凑态推送限时通知
@@ -150,11 +148,11 @@ Bridge 通过 `--variant <value>` 命令行参数区分变体事件来源，因�
 
 #### 预置示例
 
-首次启动时自动创建一个自定义区域（默认不启用，可在设置 > 左侧内容中手动开启）：
+首次启动时自动创建一个自定义区域（默认启用，可在设置 > 左侧内容中手动关闭）：
 
-| 区域               | 说明                                                        |
-| ---------------- | --------------------------------------------------------- |
-| **TRAE Flow 演示** | 交互式模板，展示 JS Bridge 推送提示、外部 API 请求、localStorage 计数器和系统数据监控 |
+| 区域                    | 说明                                                        |
+| --------------------- | --------------------------------------------------------- |
+| **TRAE Flow 自定义功能演示** | 交互式模板，展示 JS Bridge 推送提示、外部 API 请求、localStorage 计数器和系统数据监控 |
 
 ### 🌐 网页嵌入
 

@@ -1625,7 +1625,7 @@ final class AppSettingsStore: ObservableObject {
             from: defaults,
             key: Keys.expandedPanelWidth,
             exists: persistedKeys.contains(Keys.expandedPanelWidth),
-            default: 500
+            default: 630
         ))
         _notchModuleWidth = Published(initialValue: Self.normalizedNotchModuleWidth(Self.doubleValue(
             from: defaults,

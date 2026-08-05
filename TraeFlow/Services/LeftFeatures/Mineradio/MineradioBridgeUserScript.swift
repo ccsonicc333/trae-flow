@@ -17,7 +17,11 @@ enum MineradioBridgeUserScript {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     /// Bridge 版本标识
-    static let bridgeVersion = "1.4.0"
+    /// Spec: 始终上报为"最新版本"以避免 mineradio.art 弹出"Bridge 扩展可更新"提示。
+    /// 实际与网页交互时使用 `getAdaptiveBridgeVersion()` 动态读取网页内置的
+    /// `MINERADIO_BRIDGE_EXTENSION_VERSION`；此常量仅作为兜底，设为极高版本号确保
+    /// 即使动态检测失败也不会触发更新提示。
+    static let bridgeVersion = "99.99.99"
 
     /// API 消息处理器名（普通 API 请求）
     static let apiMessageHandlerName = "mineradioApi"
@@ -44,16 +48,18 @@ enum MineradioBridgeUserScript {
   var EXT_ID = 'trae-flow';
   var BRIDGE_SOURCE = 'mineradio-extension-bridge';
   var PAGE_SOURCE = 'mineradio-web-page';
-  // Spec: 固定 fallback 版本 —— 当无法读取网页内置的期望版本时使用
-  var FALLBACK_BRIDGE_VERSION = '1.4.0';
+  // Spec: 兜底版本 —— 设为极高版本号，当无法读取网页内置的期望版本时使用，
+  // 确保 mineradio.art 永远不会弹出"Bridge 扩展可更新"提示。
+  var FALLBACK_BRIDGE_VERSION = '99.99.99';
 
   // Spec: 动态获取 Bridge 版本，使其始终与网页端检测的"最新版本"一致，
   // 避免 mineradio.art 反复弹出"Bridge 扩展可更新"提示。
-  // 网页通常把期望版本暴露在全局变量（如 __mineradioLatestBridgeVersion / BRIDGE_LATEST_VERSION
-  // / latestBridgeVersion / appVersion 等）。我们扫描这些变量，若找到合法 semver 就返回它；
-  // 否则 fallback 到固定版本。
+  // mineradio.art 的 app.js 把期望版本硬编码在全局变量 `MINERADIO_BRIDGE_EXTENSION_VERSION`
+  // （如 '1.4.1'）。我们优先读取该变量；若不存在则扫描其他常见候选名；
+  // 全部失败时 fallback 到极高版本号 `99.99.99`，确保即使变量名变更也不会触发更新提示。
   function getAdaptiveBridgeVersion() {
     var candidates = [
+      'MINERADIO_BRIDGE_EXTENSION_VERSION',
       '__mineradioLatestBridgeVersion',
       '__mineradio_bridge_latest_version',
       'BRIDGE_LATEST_VERSION',

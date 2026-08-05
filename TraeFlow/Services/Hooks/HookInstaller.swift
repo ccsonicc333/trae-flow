@@ -415,13 +415,10 @@ struct HookInstaller {
         removeLegacyTraeHooks()
 
         if isFirstLaunch {
-            // Defer auto-install of default-enabled profiles to the first-run welcome
-            // sheet so the user can choose between defaults and a customized selection.
-            if let markHookInstallOnboardingPending {
-                markHookInstallOnboardingPending()
-            } else {
-                UserDefaults.standard.set(true, forKey: AppSettingsDefaultKeys.hookInstallOnboardingPending)
-            }
+            // Spec: first-launch-auto-install —— 首次安装后自动执行默认 hooks 配置，
+            // 为所有 defaultEnabled 且可管理的 TRAE 变体安装 hooks，
+            // 不再延后到已被移除的首次欢迎向导（HookInstallWelcomeWindowController 未被调用）。
+            performFirstRunDefaultInstall()
             updateVersionMetadata()
             return
         }

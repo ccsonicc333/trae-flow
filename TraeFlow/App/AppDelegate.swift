@@ -81,7 +81,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 确保 LeftFeatureStore 先完成初始化（含 legacy migration / builtin seeding），
         // 然后再注入默认自定义区域预设。这样 CustomAreaStore 调用 appendCustomAreaFeature
-        // 时写入的 LeftFeature（如 TRAE Flow 演示默认不启用）不会被 migrateFromLegacy 覆盖。
+        // 时写入的 LeftFeature 不会被 migrateFromLegacy 覆盖。
         _ = LeftFeatureStore.shared
         CustomAreaStore.shared.bootstrapBuiltInAreasIfNeeded()
 

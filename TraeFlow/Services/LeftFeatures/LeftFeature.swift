@@ -162,6 +162,8 @@ extension LeftFeature {
     static let shelfID = "shelf"
     static let newsnowID = "newsnow"
     static let mineradioID = "mineradio"
+    /// 内置 AI 热搜 webURL 功能（https://aihot.virxact.com/），默认启用且排在第一位
+    static let aihotID = "aihot"
 
     /// 系统图标名（SF Symbols）。优先使用 `customIconName`（非空时覆盖所有 kind 默认图标）。
     var systemImage: String {

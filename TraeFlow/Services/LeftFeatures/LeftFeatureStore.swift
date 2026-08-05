@@ -52,6 +52,32 @@ final class LeftFeatureStore: ObservableObject {
         static let customAreaSelectedID = "customAreaSelectedID"
     }
 
+    /// "末尾内置功能"的 sortOrder 基准值。
+    /// NewsNow / Mineradio 默认排在所有功能最后面，使用 ≥ 此基准的 sortOrder；
+    /// 用户自定义区域（customArea）和 URL 网站（webURL）插入到 < 此基准的区间，
+    /// 因此始终排在 NewsNow / Mineradio 之前。
+    private static let trailingBuiltinSortOrderBase = 1000
+
+    /// 为用户自定义功能（customArea / webURL）计算下一个 sortOrder，
+    /// 插入到「末尾内置功能」（NewsNow / Mineradio）之前。
+    private func nextUserFeatureSortOrder() -> Int {
+        let maxBelow = features
+            .map(\.sortOrder)
+            .filter { $0 < Self.trailingBuiltinSortOrderBase }
+            .max() ?? -1
+        return maxBelow + 1
+    }
+
+    /// 为「末尾内置功能」（NewsNow / Mineradio）计算下一个 sortOrder，
+    /// 确保它们始终排在所有用户功能之后。
+    private func nextTrailingBuiltinSortOrder() -> Int {
+        let maxTrailing = features
+            .map(\.sortOrder)
+            .filter { $0 >= Self.trailingBuiltinSortOrderBase }
+            .max() ?? (Self.trailingBuiltinSortOrderBase - 1)
+        return maxTrailing + 1
+    }
+
     // MARK: - Computed Properties
 
     /// 已启用功能，按 `sortOrder` 升序排列
@@ -101,6 +127,7 @@ final class LeftFeatureStore: ObservableObject {
         compactFeatureID = defaults.string(forKey: Keys.compactFeatureID)
         expandedActiveFeatureID = defaults.string(forKey: Keys.expandedActiveFeatureID)
         migrateFromLegacy()
+        ensureBuiltinAihotFeature()
         ensureBuiltinNewsNowFeature()
         ensureBuiltinMineradioFeature()
     }
@@ -146,51 +173,63 @@ final class LeftFeatureStore: ObservableObject {
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
 
         // 1. 内置功能默认配置：
-        //    - Mineradio（sortOrder: 0，默认启用）—— 用户首要功能
-        //    - NewsNow 热点新闻（sortOrder: 1，默认启用）—— 用户次要功能
-        //    - 音乐（sortOrder: 2，默认禁用）—— 可选
-        //    - 中转站（sortOrder: 3，默认禁用）—— 可选
+        //    - AI 热搜（sortOrder: 0，默认启用）—— 排在第一位，开箱即用
+        //    - 音乐（sortOrder: 1，默认启用）—— 开箱即用
+        //    - 中转站（sortOrder: 2，默认启用）—— 开箱即用
+        //    - NewsNow 热点新闻（sortOrder: trailingBase，默认禁用）—— 排在最后
+        //    - Mineradio（sortOrder: trailingBase+1，默认禁用）—— 排在最后
+        // Spec: trailing-builtins —— NewsNow / Mineradio 默认排在所有功能最后面，
+        //       用户自定义区域（含「TRAE Flow 自定义功能演示」预设）插入到它们之前。
         // 设置较小的默认展开高度，避免展开时占用过多屏幕空间
         features = [
             LeftFeature(
-                id: LeftFeature.mineradioID,
-                kind: .mineradio(pageURL: "https://mineradio.art/"),
+                id: LeftFeature.aihotID,
+                kind: .webURL(url: "https://aihot.virxact.com/"),
                 isEnabled: true,
                 sortOrder: 0,
-                expandedWidth: 900,
-                expandedHeight: 600
-            ),
-            LeftFeature(
-                id: LeftFeature.newsnowID,
-                kind: .newsnow(baseURL: "https://newsnow.busiyi.world"),
-                isEnabled: true,
-                sortOrder: 1,
-                expandedHeight: 420
+                customDisplayName: "AI 热搜"
             ),
             LeftFeature(
                 id: LeftFeature.musicID,
                 kind: .music,
-                isEnabled: false,
-                sortOrder: 2,
+                isEnabled: true,
+                sortOrder: 1,
                 expandedHeight: 280
             ),
             LeftFeature(
                 id: LeftFeature.shelfID,
                 kind: .shelf,
-                isEnabled: false,
-                sortOrder: 3,
+                isEnabled: true,
+                sortOrder: 2,
                 expandedHeight: 280
+            ),
+            LeftFeature(
+                id: LeftFeature.newsnowID,
+                kind: .newsnow(baseURL: "https://newsnow.busiyi.world"),
+                isEnabled: false,
+                sortOrder: Self.trailingBuiltinSortOrderBase,
+                expandedHeight: 420
+            ),
+            LeftFeature(
+                id: LeftFeature.mineradioID,
+                kind: .mineradio(pageURL: "https://mineradio.art/"),
+                isEnabled: false,
+                sortOrder: Self.trailingBuiltinSortOrderBase + 1,
+                expandedWidth: 900,
+                expandedHeight: 600
             )
         ]
 
         // 2. 为每个 CustomArea 创建功能（按 sortOrder 降序，与 CustomAreaStore.load 排序一致）
-        // 内置功能占用 sortOrder 0-3，自定义区域从 4 起步
+        // 内置 AI 热搜/音乐/中转站占用 sortOrder 0-2，末尾内置功能占用 trailingBase+；
+        // 自定义区域插入到 3..trailingBase-1 区间（始终排在末尾内置功能之前）
         let sortedAreas = CustomAreaStore.shared.areas.sorted { $0.sortOrder > $1.sortOrder }
-        for (index, area) in sortedAreas.enumerated() {
+        for area in sortedAreas {
+            let sortOrder = nextUserFeatureSortOrder()
             features.append(LeftFeature(
                 kind: .customArea(areaID: area.id),
                 isEnabled: false,
-                sortOrder: 4 + index
+                sortOrder: sortOrder
             ))
         }
 
@@ -226,9 +265,41 @@ final class LeftFeatureStore: ObservableObject {
         persist()
     }
 
+    /// 老用户升级幂等追加：若 features 不含 id == aihotID 的项则追加默认 AI 热搜 webURL 功能。
+    /// 已存在则不动（保留用户编辑过的 url / isEnabled / sortOrder / 名称）。
+    /// Spec: 内置 aihot 功能默认启用，排在第一位（sortOrder 0）；自动获取网站 favicon。
+    private func ensureBuiltinAihotFeature() {
+        if let idx = features.firstIndex(where: { $0.id == LeftFeature.aihotID }) {
+            // 已存在：确保 kind 是 .webURL 且 url 指向 aihot（兼容未来可能的 url 变更）
+            if case let .webURL(url) = features[idx].kind, url == "https://aihot.virxact.com/" {
+                // 补获 favicon（若未设置自定义图标）
+                fetchBuiltinFaviconIfNeeded(LeftFeature.aihotID)
+                return
+            }
+            // kind 不匹配或 url 变更，重写
+            features[idx].kind = .webURL(url: "https://aihot.virxact.com/")
+            if features[idx].customDisplayName == nil || features[idx].customDisplayName?.isEmpty == true {
+                features[idx].customDisplayName = "AI 热搜"
+            }
+            persist()
+            fetchBuiltinFaviconIfNeeded(LeftFeature.aihotID)
+            return
+        }
+        features.append(LeftFeature(
+            id: LeftFeature.aihotID,
+            kind: .webURL(url: "https://aihot.virxact.com/"),
+            isEnabled: true,
+            sortOrder: 0,
+            customDisplayName: "AI 热搜"
+        ))
+        persist()
+        fetchBuiltinFaviconIfNeeded(LeftFeature.aihotID)
+    }
+
     /// 老用户升级幂等追加：若 features 不含 id == newsnowID 的项则追加默认 newsnow 功能。
     /// 已存在则不动（保留用户编辑过的 baseURL / isEnabled / sortOrder）。
     /// 在 init 末尾 load() 之后调用。
+    /// Spec: 内置 newsnow 功能默认禁用，排在所有功能最后面（trailing sortOrder）
     /// Spec: 内置 newsnow 功能自动获取网站 favicon（若 customIconName 为 nil）
     private func ensureBuiltinNewsNowFeature() {
         if features.contains(where: { $0.id == LeftFeature.newsnowID }) {
@@ -236,12 +307,11 @@ final class LeftFeatureStore: ObservableObject {
             fetchBuiltinFaviconIfNeeded(LeftFeature.newsnowID)
             return
         }
-        let maxSortOrder = features.map(\.sortOrder).max() ?? -1
         features.append(LeftFeature(
             id: LeftFeature.newsnowID,
             kind: .newsnow(baseURL: "https://newsnow.busiyi.world"),
-            isEnabled: true,
-            sortOrder: maxSortOrder + 1,
+            isEnabled: false,
+            sortOrder: nextTrailingBuiltinSortOrder(),
             expandedHeight: 420
         ))
         persist()
@@ -251,6 +321,7 @@ final class LeftFeatureStore: ObservableObject {
     /// 老用户升级幂等追加：若 features 不含 id == mineradioID 的项则追加默认 mineradio 功能。
     /// 已存在则不动（保留用户编辑过的 pageURL / isEnabled / sortOrder）。
     /// Spec: mineradio-bridge-compat-layer
+    /// Spec: 内置 mineradio 功能默认禁用，排在所有功能最后面（trailing sortOrder）
     /// Spec: 内置 mineradio 功能自动获取网站 favicon（若 customIconName 为 nil）
     private func ensureBuiltinMineradioFeature() {
         if let idx = features.firstIndex(where: { $0.id == LeftFeature.mineradioID }) {
@@ -266,12 +337,11 @@ final class LeftFeatureStore: ObservableObject {
             fetchBuiltinFaviconIfNeeded(LeftFeature.mineradioID)
             return
         }
-        let maxSortOrder = features.map(\.sortOrder).max() ?? -1
         features.append(LeftFeature(
             id: LeftFeature.mineradioID,
             kind: .mineradio(pageURL: "https://mineradio.art/"),
-            isEnabled: true,
-            sortOrder: maxSortOrder + 1,
+            isEnabled: false,
+            sortOrder: nextTrailingBuiltinSortOrder(),
             expandedWidth: 900,
             expandedHeight: 600
         ))
@@ -279,7 +349,7 @@ final class LeftFeatureStore: ObservableObject {
         fetchBuiltinFaviconIfNeeded(LeftFeature.mineradioID)
     }
 
-    /// Spec: 为内置 newsnow/mineradio 功能自动获取网站 favicon。
+    /// Spec: 为内置 newsnow/mineradio/aihot 功能自动获取网站 favicon。
     /// 仅当 `customIconName` 为 nil 时触发（首次安装或老用户升级时补获）。
     /// 已获取过 favicon（`img:favicon-` 前缀）或用户已自定义图标则跳过，避免每次启动发网络请求。
     private func fetchBuiltinFaviconIfNeeded(_ featureID: String) {
@@ -294,6 +364,10 @@ final class LeftFeatureStore: ObservableObject {
             url = URL(string: baseURL)
         case .mineradio(let pageURL):
             url = URL(string: pageURL)
+        case .webURL(let urlString):
+            // 仅内置 aihot 功能自动获取 favicon；用户自建的 webURL 功能由
+            // appendWebURLFeature / 编辑表单单独处理，不会走到这里（id 不匹配）
+            url = URL(string: urlString)
         default:
             return
         }
@@ -383,13 +457,13 @@ final class LeftFeatureStore: ObservableObject {
     }
 
     /// 为自定义 HTML 区域追加对应功能（由 CustomAreaStore.addArea 联动调用）。
-    /// `isEnabled` 默认 true；预设注入时（如「TRAE Flow 演示」）可传 false 使其默认不启用。
+    /// `isEnabled` 默认 true；预设注入时（如「TRAE Flow 自定义功能演示」）可传 false 使其默认不启用。
+    /// Spec: 自定义区域插入到末尾内置功能（NewsNow / Mineradio）之前。
     func appendCustomAreaFeature(areaID: String, isEnabled: Bool = true) {
-        let maxSortOrder = features.map(\.sortOrder).max() ?? -1
         features.append(LeftFeature(
             kind: .customArea(areaID: areaID),
             isEnabled: isEnabled,
-            sortOrder: maxSortOrder + 1
+            sortOrder: nextUserFeatureSortOrder()
         ))
         persist()
     }
@@ -432,11 +506,10 @@ final class LeftFeatureStore: ObservableObject {
     /// 失败时不写入，回退到 `systemImage` 默认文字图标「U」。
     @discardableResult
     func appendWebURLFeature(name: String, url: String, iconName: String?, variant: TraeVariant) -> LeftFeature {
-        let maxSortOrder = features.map(\.sortOrder).max() ?? -1
         let feature = LeftFeature(
             kind: .webURL(url: url),
             isEnabled: true,
-            sortOrder: maxSortOrder + 1,
+            sortOrder: nextUserFeatureSortOrder(),
             customIconName: iconName,
             customDisplayName: name
         )
