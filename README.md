@@ -47,7 +47,7 @@ TRAE FLOW 的三条主线对应三种 TRAE 能力和三个用户动作：
 
 ### 3. TRAE Work Design 一键创建电子宠物上岛
 
-内置基于精灵表的桌面宠物系统，内置 月薪喵、Frieren 等多个主题。更支持从 `~/.traeflow/pets` 加载自定义宠物包，**让你可以用 TRAE Work Design 工作流生成自己的角色素材（已内置完整工作流提示词），一键放上岛**。宠物会随任务状态切换动画，还能拖拽到桌面、滚轮缩放，成为你的专属桌面陪伴。
+内置基于宠物表的桌面宠物系统，内置 月薪喵、Frieren 等多个主题。更支持从 `~/.traeflow/pets` 加载自定义宠物包，**让你可以用 TRAE Work Design 工作流生成自己的角色素材（已内置完整工作流提示词），一键放上岛**。宠物会随任务状态切换动画，还能拖拽到桌面、滚轮缩放，成为你的专属桌面陪伴。
 
 <a id="功能"></a>
 
@@ -73,7 +73,7 @@ TRAE FLOW 的三条主线对应三种 TRAE 能力和三个用户动作：
 
 **TRAE Work Design 一键创建电子宠物上岛**
 
-- 🐱 **桌面宠物** — 基于精灵表动画的 Codex 兼容宠物系统，可在 Flow 岛和桌面显示，支持拖拽 detach、滚轮缩放
+- 🐱 **桌面宠物** — 基于宠物表动画的 Codex 兼容宠物系统，可在 Flow 岛和桌面显示，支持拖拽 detach、滚轮缩放
 - 内置多套主题包：TRAE FLOW / 月薪喵 / 光环小猫 / 鸡哥 ikun / Frieren / Homelander / Shinchan / TaoTao
 - 支持从 `~/.traeflow/pets` 或 `~/.codex/pets` 加载自定义宠物包
 - 项目内置 TRAE Work Design 完整工作流提示词，可一键生成自己的角色素材上岛
@@ -171,7 +171,7 @@ TRAE 和 TRAE CN 通过 Trae 官方 Hook 协议提供完整事件流支持。**�
 
 ### 🐱 内置宠物
 
-基于精灵表（spritesheet）动画的桌面宠物系统，兼容 Codex 宠物规范。宠物会在 Flow 岛中展示不同状态的动画（空闲、运行、等待、跳跃等），陪伴编码过程。
+基于宠物表（spritesheet）动画的桌面宠物系统，兼容 Codex 宠物规范。宠物会在 Flow 岛中展示不同状态的动画（空闲、运行、等待、跳跃等），陪伴编码过程。
 
 ![alt text](docs/images/settings-pets.png)
 
@@ -190,7 +190,7 @@ TRAE 和 TRAE CN 通过 Trae 官方 Hook 协议提供完整事件流支持。**�
 | **Shinchan**   | `shinchan`   | 未知 |
 | **TaoTao**     | `taotao`     | 人物 |
 
-宠物主题包遵循 Codex 规范的 8 列 × 9 行精灵表格式（1536×1872，每帧 192×208），支持在设置面板中切换、预览，也支持从 `~/.traeflow/pets/` 或 `~/.codex/pets/` 加载自定义宠物。
+宠物主题包遵循 Codex 规范的 8 列 × 9 行宠物表格式（1536×1872，每帧 192×208），支持在设置面板中切换、预览，也支持从 `~/.traeflow/pets/` 或 `~/.codex/pets/` 加载自定义宠物。
 
 <br />
 

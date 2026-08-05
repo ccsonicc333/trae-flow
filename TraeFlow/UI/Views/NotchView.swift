@@ -898,13 +898,15 @@ struct NotchView: View {
 
     /// Spec: 紧凑态左半区功能分发 —— 根据 `LeftFeatureKind` 渲染对应紧凑态视图。
     /// 自定义 HTML 区域若关联目录已被删除则回退到占位视图。
-    /// Spec: compact-icon-only-builtins —— 内置功能（音乐 / 中转站 / NewsNow / AI 热搜 webURL）
-    ///       紧凑态仅显示对应图标，不渲染完整紧凑视图；Mineradio 仍渲染歌词/标题紧凑视图；
-    ///       用户自定义 HTML 区域（customArea）仍渲染完整 WebView。
+    /// Spec: compact-icon-only-builtins —— 内置功能（中转站 / NewsNow / AI 热搜 webURL）
+    ///       紧凑态仅显示对应图标；音乐渲染 `MusicCompactView`（封面 + 标题）；
+    ///       Mineradio 渲染歌词/标题紧凑视图；用户自定义 HTML 区域（customArea）渲染完整 WebView。
     @ViewBuilder
     private func compactFeatureView(for feature: LeftFeature) -> some View {
         switch feature.kind {
-        case .music, .shelf, .newsnow, .webURL:
+        case .music:
+            MusicCompactView()
+        case .shelf, .newsnow, .webURL:
             // 内置功能紧凑态仅显示图标
             FeatureIconView(feature: feature, size: 14)
                 .frame(width: 24, height: 24)

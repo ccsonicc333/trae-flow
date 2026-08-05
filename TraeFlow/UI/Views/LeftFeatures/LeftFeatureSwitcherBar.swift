@@ -98,63 +98,64 @@ private struct FeatureSwitcherButton: View {
     }
 
     var body: some View {
-        Button {
-            store.setExpandedActiveFeature(id: feature.id)
-            onSelect?(feature.id)
-        } label: {
-            FeatureIconView(feature: feature, size: 14, color: foregroundColor)
-                .frame(width: 28, height: 28)
-                .background(backgroundFill)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(feature.displayName)
-        .opacity(isDragging ? 0.4 : 1.0) // 拖拽中半透明
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                isHovering = hovering
+        // Spec: 不用 `Button` 包装 —— macOS 上 Button 会消费 mouseDown 事件，
+        // 导致附加在外层的 `.onDrag` 几乎无法识别拖拽手势。改用普通 View + `.onTapGesture`
+        // 处理点击，让 `.onDrag` / `.onDrop` 能正常接管鼠标拖拽。
+        FeatureIconView(feature: feature, size: 14, color: foregroundColor)
+            .frame(width: 28, height: 28)
+            .background(backgroundFill)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                store.setExpandedActiveFeature(id: feature.id)
+                onSelect?(feature.id)
             }
-        }
-        .onDrag {
-            onDragStart()
-            return NSItemProvider(object: feature.id as NSString)
-        }
-        .onDrop(
-            of: [.text],
-            delegate: FeatureDropDelegate(
-                featureID: feature.id,
-                onDropEntered: onDropEntered,
-                onDropExited: onDropExited,
-                onDropReceived: onDropReceived
+            .help(feature.displayName)
+            .opacity(isDragging ? 0.4 : 1.0) // 拖拽中半透明
+            .onHover { hovering in
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isHovering = hovering
+                }
+            }
+            .onDrag {
+                onDragStart()
+                return NSItemProvider(object: feature.id as NSString)
+            }
+            .onDrop(
+                of: [.text],
+                delegate: FeatureDropDelegate(
+                    featureID: feature.id,
+                    onDropEntered: onDropEntered,
+                    onDropExited: onDropExited,
+                    onDropReceived: onDropReceived
+                )
             )
-        )
-        .overlay(
-            // Drop 指示器：被 targeted 时显示边框
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(Color.accentColor.opacity(isDropTarget ? 0.9 : 0), lineWidth: 1.5)
-                .scaleEffect(isDropTarget ? 1.08 : 1.0)
-                .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isDropTarget)
-        )
-        .overlay(alignment: .leading) {
-            // 左侧插入指示线（dropBefore 且当前是目标时显示）
-            if isDropTarget && dropBefore {
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: 2, height: 24)
-                    .offset(x: -3)
-                    .transition(.scale.combined(with: .opacity))
+            .overlay(
+                // Drop 指示器：被 targeted 时显示边框
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.accentColor.opacity(isDropTarget ? 0.9 : 0), lineWidth: 1.5)
+                    .scaleEffect(isDropTarget ? 1.08 : 1.0)
+                    .animation(.spring(response: 0.25, dampingFraction: 0.6), value: isDropTarget)
+            )
+            .overlay(alignment: .leading) {
+                // 左侧插入指示线（dropBefore 且当前是目标时显示）
+                if isDropTarget && dropBefore {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: 2, height: 24)
+                        .offset(x: -3)
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
-        }
-        .overlay(alignment: .trailing) {
-            // 右侧插入指示线（!dropBefore 且当前是目标时显示）
-            if isDropTarget && !dropBefore {
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: 2, height: 24)
-                    .offset(x: 3)
-                    .transition(.scale.combined(with: .opacity))
+            .overlay(alignment: .trailing) {
+                // 右侧插入指示线（!dropBefore 且当前是目标时显示）
+                if isDropTarget && !dropBefore {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: 2, height: 24)
+                        .offset(x: 3)
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
-        }
     }
 
     private var foregroundColor: Color {
