@@ -136,7 +136,7 @@ final class CustomAreaStore: ObservableObject {
         )
         areas.append(area)
         persist()
-        LeftFeatureStore.shared.appendCustomAreaFeature(areaID: area.id, isEnabled: defaultEnabled)
+        LeftFeatureStore.shared.appendCustomAreaFeature(areaID: area.id, isEnabled: defaultEnabled, iconName: iconName)
         return area
     }
 
@@ -1032,8 +1032,8 @@ final class CustomAreaStore: ObservableObject {
         )
         areas.append(area)
         persist()
-        // 联动 LeftFeatureStore 为新目录创建对应功能项
-        LeftFeatureStore.shared.appendCustomAreaFeature(areaID: area.id)
+        // 联动 LeftFeatureStore 为新目录创建对应功能项（同步 iconName 以便 FeatureIconView 渲染）
+        LeftFeatureStore.shared.appendCustomAreaFeature(areaID: area.id, iconName: iconName)
         return area
     }
 
@@ -1077,7 +1077,7 @@ final class CustomAreaStore: ObservableObject {
         )
         areas.append(area)
         persist()
-        LeftFeatureStore.shared.appendCustomAreaFeature(areaID: area.id)
+        LeftFeatureStore.shared.appendCustomAreaFeature(areaID: area.id, iconName: iconName)
         return area
     }
 

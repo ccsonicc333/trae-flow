@@ -127,6 +127,7 @@ final class LeftFeatureStore: ObservableObject {
         compactFeatureID = defaults.string(forKey: Keys.compactFeatureID)
         expandedActiveFeatureID = defaults.string(forKey: Keys.expandedActiveFeatureID)
         migrateFromLegacy()
+        syncCustomAreaIconNames()
         ensureBuiltinAihotFeature()
         ensureBuiltinNewsNowFeature()
         ensureBuiltinMineradioFeature()
@@ -230,7 +231,8 @@ final class LeftFeatureStore: ObservableObject {
             features.append(LeftFeature(
                 kind: .customArea(areaID: area.id),
                 isEnabled: false,
-                sortOrder: sortOrder
+                sortOrder: sortOrder,
+                customIconName: area.iconName
             ))
         }
 
@@ -264,6 +266,24 @@ final class LeftFeatureStore: ObservableObject {
 
         // 5. 持久化 features 与新选择键
         persist()
+    }
+
+    /// 同步 customArea 功能的图标：若 `LeftFeature.customIconName` 为 nil 但对应
+    /// `CustomArea.iconName` 非空，则补齐。用于老数据迁移 —— 修复 customArea 图标
+    /// 未同步到 LeftFeature 导致 `FeatureIconView(feature:)` 回退默认 globe 的 bug。
+    /// 幂等：仅填充 nil 的 customIconName，不覆盖用户已设置的图标；无变化时不写盘。
+    private func syncCustomAreaIconNames() {
+        guard !features.isEmpty else { return }
+        var didChange = false
+        for index in features.indices {
+            guard case .customArea(let areaID) = features[index].kind else { continue }
+            guard features[index].customIconName == nil else { continue }
+            guard let area = CustomAreaStore.shared.areas.first(where: { $0.id == areaID }) else { continue }
+            guard let iconName = area.iconName, !iconName.isEmpty else { continue }
+            features[index].customIconName = iconName
+            didChange = true
+        }
+        if didChange { persist() }
     }
 
     /// 老用户升级幂等追加：若 features 不含 id == aihotID 的项则追加默认 AI 热搜 webURL 功能。
@@ -459,12 +479,15 @@ final class LeftFeatureStore: ObservableObject {
 
     /// 为自定义 HTML 区域追加对应功能（由 CustomAreaStore.addArea 联动调用）。
     /// `isEnabled` 默认 true；预设注入时（如「TRAE Flow 自定义功能演示」）可传 false 使其默认不启用。
+    /// `iconName` 同步自 `CustomArea.iconName`，使 `FeatureIconView(feature:)` 能正确渲染
+    /// 文字 / 图片图标（与 webURL / builtin 一致），否则会回退到 kind 默认 SF Symbol。
     /// Spec: 自定义区域插入到末尾内置功能（NewsNow / Mineradio）之前。
-    func appendCustomAreaFeature(areaID: String, isEnabled: Bool = true) {
+    func appendCustomAreaFeature(areaID: String, isEnabled: Bool = true, iconName: String? = nil) {
         features.append(LeftFeature(
             kind: .customArea(areaID: areaID),
             isEnabled: isEnabled,
-            sortOrder: nextUserFeatureSortOrder()
+            sortOrder: nextUserFeatureSortOrder(),
+            customIconName: iconName
         ))
         persist()
     }

@@ -914,6 +914,14 @@ private struct SettingsPanelContentView: View {
             // 复用 EditableCustomAreaView 编辑表单（本地目录模式）
             EditableCustomAreaView(area: area) { updated in
                 customAreaStore.updateArea(updated)
+                // Spec: 同步图标到 LeftFeature.customIconName，使 FeatureIconView(feature:)
+                // 能正确渲染文字/图片图标（与 webURL / builtin 一致），否则回退默认 globe
+                if let feature = leftFeatureStore.features.first(where: {
+                    if case .customArea(let areaID) = $0.kind { return areaID == updated.id }
+                    return false
+                }) {
+                    leftFeatureStore.setCustomIconName(id: feature.id, name: updated.iconName)
+                }
                 editingArea = nil
             }
         }

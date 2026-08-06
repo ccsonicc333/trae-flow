@@ -333,7 +333,7 @@ enum SubagentVisibilityMode: String, CaseIterable, Identifiable {
 @MainActor
 final class AppSettingsStore: ObservableObject {
     static let shared = AppSettingsStore()
-    nonisolated static let defaultNotchModuleWidth: Double = 320
+    nonisolated static let defaultNotchModuleWidth: Double = 380
     nonisolated static let minimumNotchModuleWidth: Double = 70
     nonisolated static let maximumNotchModuleWidth: Double = 1000
 
