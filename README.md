@@ -7,6 +7,7 @@
   <a href="#三条主线">三条主线</a> •
   <a href="#功能">功能</a> •
   <a href="#从源码构建">构建</a> •
+  <a href="docs/experience-cases/trae-flow体验用例.html">体验用例</a> •
   <a href="docs/privacy-policy.md">隐私政策</a>
 </p>
 
