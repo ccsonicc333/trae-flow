@@ -26,11 +26,11 @@ jobs:
 
       - name: Prepare site root
         run: |
-          mkdir -p _site
-          # 把 docs/ 下的内容作为站点根发布
-          cp -R docs/* _site/
-          # 把 README.md 复制到站点根，方便访问首页
-          cp README.md _site/
+          mkdir -p _site/images
+          # 只发布体验用例目录，减小 artifact 体积
+          cp -R docs/experience-cases/* _site/
+          # 体验用例中引用了一张上级 images 目录的 GIF，一并带上
+          cp docs/images/trae-flow-mineradio.gif _site/images/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
