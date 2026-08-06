@@ -601,7 +601,7 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
       <img src="add-custom-function.jpg" alt="添加自定义功能">
       <li>点击功能行右侧「在 TRAE 中打开」菜单，选择已安装的 TRAE 变体。</li>
       <img src="open-in-trae.jpg" alt="在 TRAE 中打开">
-      <li>TRAE 变体被唤起并以新窗口打开该自定义区域的目录，可直接在 IDE 内编辑 <code>index.html</code> 等文件。</li>
+      <li>TRAE IDE被唤起并以新窗口打开该自定义区域的目录，可直接在 IDE 内编辑 <code>index.html</code> 等文件。</li>
       <img src="edit-custom-function.jpg" alt="编辑自定义功能">
       <li>修改保存文件后回到 Flow 岛观察渲染。</li>
     </ol>
@@ -804,6 +804,39 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
       var linkMap = {};
       links.forEach(function (l) { linkMap[l.getAttribute('href').slice(1)] = l; });
 
+      // 边缘容差，避免 sticky + 浮点在边界附近反复触发滚动
+      var EDGE_MARGIN = 8;
+      // 节流计时器，限制 updateActive 在滚动期间的执行频率
+      var scrollTimer = null;
+
+      function bringActiveIntoView(activeEl) {
+        var sidebar = document.querySelector('.toc-sidebar');
+        // 媒体查询隐藏 sidebar 时 getClientRects() 为空，跳过避免误判
+        if (!sidebar || sidebar.getClientRects().length === 0) return;
+
+        var r = activeEl.getBoundingClientRect();
+        var sr = sidebar.getBoundingClientRect();
+        var targetTop = null;
+
+        if (r.top < sr.top + EDGE_MARGIN) {
+          // active 顶出 sidebar 上沿，向上对齐
+          targetTop = sidebar.scrollTop + (r.top - sr.top) - EDGE_MARGIN;
+        } else if (r.bottom > sr.bottom - EDGE_MARGIN) {
+          // active 超出 sidebar 下沿，向下对齐
+          targetTop = sidebar.scrollTop + (r.bottom - sr.bottom) + EDGE_MARGIN;
+        }
+
+        if (targetTop == null) return;
+        // 限制到合法滚动范围
+        targetTop = Math.max(0, Math.min(targetTop, sidebar.scrollHeight - sidebar.clientHeight));
+        // 仅在差距大于 1px 时才同步设置 scrollTop，避免无意义写入造成抖动
+        if (Math.abs(sidebar.scrollTop - targetTop) > 1) {
+          // 直接设置 scrollTop 是同步操作，不会触发 window 的 scroll 事件，
+          // 也不会像 scrollIntoView({behavior:'smooth'}) 那样异步滚动引发反馈循环
+          sidebar.scrollTop = targetTop;
+        }
+      }
+
       function updateActive() {
         var scrollY = window.scrollY;
         var activeId = null;
@@ -818,17 +851,19 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
         if (activeId && linkMap[activeId]) linkMap[activeId].classList.add('active');
 
         var activeEl = activeId && linkMap[activeId] ? linkMap[activeId] : null;
-        if (activeEl) {
-          var sidebar = document.querySelector('.toc-sidebar');
-          var r = activeEl.getBoundingClientRect();
-          var sr = sidebar.getBoundingClientRect();
-          if (r.top < sr.top || r.bottom > sr.bottom) {
-            activeEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-          }
-        }
+        if (activeEl) bringActiveIntoView(activeEl);
       }
 
-      window.addEventListener('scroll', updateActive, { passive: true });
+      function scheduleUpdateActive() {
+        if (scrollTimer) return;
+        scrollTimer = setTimeout(function () {
+          scrollTimer = null;
+          updateActive();
+        }, 80);
+      }
+
+      window.addEventListener('scroll', scheduleUpdateActive, { passive: true });
+      window.addEventListener('resize', scheduleUpdateActive, { passive: true });
       updateActive();
 
       var backBtn = document.getElementById('backToTop');
