@@ -74,7 +74,7 @@ TRAE FLOW 的三条主线对应三种 TRAE 能力和三个用户动作：
 **TRAE Work Design 一键创建电子宠物上岛**
 
 - 🐱 **桌面宠物** — 基于宠物表动画的 Codex 兼容宠物系统，可在 Flow 岛和桌面显示，支持拖拽 detach、滚轮缩放
-- 内置多套主题包：TRAE FLOW / 月薪喵 / 光环小猫 / 鸡哥 ikun / Frieren / Homelander / Shinchan / TaoTao
+- 内置多套主题包：TRAE FLOW / 月薪喵 / 光环小猫 / Frieren / Shinchan / TaoTao
 - 支持从 `~/.traeflow/pets` 或 `~/.codex/pets` 加载自定义宠物包
 - 项目内置 TRAE Work Design 完整工作流提示词，可一键生成自己的角色素材上岛
 
@@ -184,9 +184,7 @@ TRAE 和 TRAE CN 通过 Trae 官方 Hook 协议提供完整事件流支持。**�
 | **TRAE FLOW**  | `traeflow`   | 默认 |
 | **月薪喵**        | `yuexinmiao` | 动物 |
 | **光环小猫**       | `halokitten` | 动物 |
-| **鸡哥 ikun**    | `ikun`       | 动物 |
 | **Frieren**    | `frieren`    | 人物 |
-| **Homelander** | `homelander` | 未知 |
 | **Shinchan**   | `shinchan`   | 未知 |
 | **TaoTao**     | `taotao`     | 人物 |
 
