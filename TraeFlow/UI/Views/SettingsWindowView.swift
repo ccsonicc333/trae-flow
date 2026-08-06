@@ -2719,10 +2719,14 @@ private struct SettingsPanelContentView: View {
             Text(appLocalized: "最新")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(TerminalColors.green)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         case .found(let version, _), .readyToInstall(let version):
             Text("v\(version)")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(TerminalColors.green)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         case .idle, .error:
             Image(systemName: "arrow.right.circle.fill")
                 .font(.system(size: 18))
