@@ -351,6 +351,13 @@
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
       display: block;
       margin: 0 auto;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .content img {
+      max-width: 100%;
+      height: auto;
     }
 
     .img-figure figcaption {
@@ -456,11 +463,8 @@
 
     <figure class="img-figure"><img src="gatekeeper-interception.jpg" alt="Gatekeeper 拦截解决方法"
         style="max-width:70%;width:100%;height:auto;" />
-      <figcaption>图 1：Gatekeeper 拦截时在「隐私与安全性」点击「仍要打开」</figcaption>
     </figure>
 
-
-    <p><em>图 1：Gatekeeper 拦截时在「隐私与安全性」点击「仍要打开」</em></p>
 
     <ul>
       <li>2、右键点击应用图标，选择“打开”。</li>
@@ -489,11 +493,7 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug bui
 
     <figure class="img-figure"><img src="enable-trae-hooks.jpg" alt="启用 TRAE Hooks 设置界面"
         style="max-width:80%;width:100%;height:auto;" />
-      <figcaption>图 2：在「设置 > Hooks」中勾选对应变体的「启用 Hook」</figcaption>
     </figure>
-
-
-    <p><em>图 2：在「设置 > Hooks」中勾选对应变体的「启用 Hook」</em></p>
 
 
     <hr>
@@ -534,11 +534,8 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug bui
 
     <figure class="img-figure"><img src="dual-variant-tasks.jpg" alt="双变体并发任务列表"
         style="max-width:90%;width:100%;height:auto;" />
-      <figcaption>图 3：展开态右侧列出各变体待处理任务数与跳回按钮</figcaption>
     </figure>
 
-
-    <p><em>图 3：展开态右侧列出各变体待处理任务数与跳回按钮</em></p>
 
 
     <hr>
@@ -562,6 +559,7 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug bui
     </ol>
 
     <p><strong>预期</strong>：尺寸实时跟随；释放后持久化到对应功能，下次展开恢复。</p>
+    <img src="dragAndDropToResize.gif" alt="拖拽调整尺寸">
 
     <h3>VC-02 音乐控制</h3>
 
@@ -601,13 +599,14 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug bui
     <h3>VC-06 新增本地 HTML 区域</h3>
 
     <ol>
-      <li>「设置页面 > 左侧功能 > 添加自定义功能 > 本地目录」</li>
+      <li>「设置页面 > 左侧功能 > 添加自定义功能 > 类型选择 本地目录」</li>
       <li>输入名称添加，可自定义图标。</li>
       <img src="add-custom-function.jpg" alt="添加自定义功能">
       <li>点击功能行右侧「在 TRAE 中打开」菜单，选择已安装的 TRAE 变体（TRAE / TRAE CN / TRAE WORK / TRAE WORK CN 中已安装项）。</li>
       <img src="open-in-trae.jpg" alt="在 TRAE 中打开">
       <li>TRAE 变体被唤起并以新窗口打开该自定义区域的目录，可直接在 IDE 内编辑 <code>index.html</code> 等文件。</li>
-      <li>保存文件后回到 Flow 岛观察渲染。</li>
+      <img src="edit-custom-function.jpg" alt="编辑自定义功能">
+      <li>修改保存文件后回到 Flow 岛观察渲染。</li>
     </ol>
 
     <p><strong>预期</strong>：新区域出现在切换栏并正常渲染；「在 TRAE 中打开」仅列出本机已安装的 TRAE 变体，选中后准确跳回对应 IDE 并定位到该目录；文件改动 FSEvents 自动刷新；沙箱外目录通过
@@ -616,7 +615,7 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug bui
     <h3>VC-07 网页嵌入</h3>
 
     <ol>
-      <li>「设置 > 左侧内容 > 新增功能 > 网页」。</li>
+      <li>「设置 > 左侧功能 > 添加自定义功能 > 类型选择 网站 URL」。</li>
       <li>输入名称与 URL，等待自动抓取 favicon 与 title。</li>
       <li>开启「收起后保持后台运行」，收起 Flow 岛。</li>
     </ol>
@@ -625,12 +624,13 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug bui
 
     <h3>VC-08 NewsNow / Mineradio（可选）</h3>
 
-    <p>「设置 > 左侧内容 > 启用对应功能」。</p>
+    <p>「设置 > 左侧功能 > 启用对应功能」。</p>
 
     <ul>
       <li><strong>NewsNow</strong>：启用后加载内置远程实例浏览新闻。</li>
       <li><strong>Mineradio</strong>：启用后在「设置 > Mineradio」登录网易云 / QQ / 酷狗，播放带歌词歌曲；紧凑态显示歌词，收起后通过离屏窗口保持播放。</li>
     </ul>
+    <img src="../images/trae-flow-mineradio.gif" alt="NewsNow">
 
     <h3>VC-09 全局快捷键</h3>
 
@@ -650,6 +650,7 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug bui
     <ol>
       <li>「设置 > 宠物」切换主题：TRAE FLOW / 月薪喵 / 光环小猫 / 鸡哥 ikun / Frieren / Homelander / Shinchan / TaoTao。</li>
     </ol>
+    <img src="settings-pets.png" alt="宠物切换">
 
     <p><strong>预期</strong>：宠物表动画切换；立即应用到 Flow 岛宠物。</p>
 
@@ -661,17 +662,13 @@ xcodebuild -project TraeFlow.xcodeproj -scheme TraeFlow -configuration Debug bui
       <li>拖回 Flow 岛。</li>
     </ol>
 
-    <p><strong>预期</strong>：以独立浮窗显示；滚轮每次 ±8%，最小 0.5 倍；缩放保持左边缘与垂直居中，向右生长；拖回flow岛恢复。</p>
+    <p><strong>预期</strong>：以独立浮窗显示；滚轮可缩放大小；拖回flow岛恢复。</p>
 
 
 
-    <figure class="img-figure"><img src="pet-detach.jpg" alt="宠物 Detach 到桌面"
-        style="max-width:80%;width:100%;height:auto;" />
-      <figcaption>图 4：宠物拖拽到桌面后以独立浮窗显示，滚轮可缩放</figcaption>
+    <figure class="img-figure">
+      <img src="dragAndDropPetsToDisplayToDesktop.gif" alt="拖拽宠物到桌面">
     </figure>
-
-
-    <p><em>图 4：宠物拖拽到桌面后以独立浮窗显示，滚轮可缩放</em></p>
 
 
     <h3>PC-03 自定义宠物包</h3>
