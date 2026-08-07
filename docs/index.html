@@ -450,7 +450,8 @@
     <h3>1.2 获取应用</h3>
 
     <ul>
-      <li><a href="https://github.com/ccsonicc333/trae-flow" target="_blank" rel="noopener noreferrer">下载 Releases
+      <li><a href="https://github.com/ccsonicc333/trae-flow" target="_blank"
+          rel="noopener noreferrer">打开trae-flow的GitHub页面，下载最新版 Releases
           DMG</a>
         拖入 <code>/Applications</code>；</li>
       <li>当前 GitHub Release 构建使用 ad-hoc 签名，<strong>未经过 Apple 公证（Notarization）</strong>。首次打开时，macOS Gatekeeper
@@ -474,7 +475,7 @@
 xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
 </code></pre>
 
-    <h3>1.3 启用 TRAE Hooks（任务上岛前置）</h3>
+    <h3>1.3 启用 TRAE Hooks（任务上岛前置条件）</h3>
 
     <ol>
       <li>启动应用，打开TRAE「设置 > Hooks」。</li>
@@ -522,7 +523,7 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
       <li>在两个变体中分别发起会话。</li>
     </ol>
 
-    <p><strong>预期</strong>：两个变体计数独立和显示对应标签；展开态右侧分别列出待处理任务数与跳回按钮；点击各行准确跳回对应 IDE。</p>
+    <p><strong>预期</strong>：两个变体计数独立和显示对应标签；展开态右侧分别列出待处理任务数与跳回按钮；点击各行准确跳回对应 IDE 会话位置。</p>
 
 
 
@@ -536,7 +537,7 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
 
     <h2>主线二：VibeCoding 组件上岛</h2>
 
-    <h3>VC-01 功能切换与排序</h3>
+    <h3>VC-01 左侧功能切换与排序</h3>
 
     <ol>
       <li>鼠标悬浮或点击flow岛的左半侧展开功能岛。</li>
@@ -548,14 +549,14 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
     <h3>VC-02 展开面板尺寸调整</h3>
 
     <ol>
-      <li>鼠标移动或点击到flow岛的左半侧展开功能页面，鼠标移动到左右下角显示调整尺寸按钮。</li>
-      <li>先点击一次调整尺寸按钮，随后可以拖拽左下 / 右下角圆角指示器调整功能页尺寸。</li>
+      <li>鼠标移动或点击到flow岛的左半侧展开功能页面，鼠标移动到展开功能页底部显示调整尺寸按钮。</li>
+      <li>先点击一次调整尺寸按钮，随后可以拖拽左下 / 右下角调整尺寸按钮调整功能页尺寸。</li>
     </ol>
 
     <p><strong>预期</strong>：尺寸实时跟随；释放后持久化到对应功能，下次展开保持调整后的尺寸。</p>
     <img src="experience-cases/dragAndDropToResize.gif" alt="拖拽调整尺寸">
 
-    <h3>VC-02 音乐控制</h3>
+    <h3>VC-02 系统媒体音乐控制</h3>
 
     <ol>
       <li>在 Music.app / Spotify / 网易云 / QQ 音乐之一播放音乐。</li>
@@ -566,7 +567,7 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
 
     <ul>
       <li>紧凑态：渲染音乐视图（18pt 圆角封面缩略图 + 截断曲目标题）；无播放时显示灰色音符图标。</li>
-      <li>展开态：显示 140pt 封面大图、曲目 / 艺术家 / 专辑信息、完整控制按钮（上一曲 / 播放暂停 / 下一曲），背景为封面主色调动态渐变。</li>
+      <li>展开态：显示 140pt 封面大图、曲目 / 艺术家 / 专辑信息、控制按钮（上一曲 / 播放暂停 / 下一曲），背景为封面主色调动态渐变。</li>
       <li>控制操作实时生效到系统播放器。</li>
     </ul>
     <img src="experience-cases/music-control.jpg" alt="音乐控制">
@@ -574,7 +575,7 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
     <h3>VC-04 中转站文件暂存</h3>
 
     <ol>
-      <li>从任意地方拖拽可用文件到flow岛自动识别进入中转站。</li>
+      <li>从任意地方拖拽可用文件到flow岛自动识别展开中转站功能。</li>
       <li>右键移除单个文件 / 点击 AirDrop 分享全部 / 中转文件拖拽到其他应用</li>
     </ol>
 
@@ -584,10 +585,10 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
     <h3>VC-05 自定义区域 JS Bridge</h3>
 
     <ol>
-      <li>切换到「TRAE Flow 自定义功能演示」。</li>
+      <li>切换到「TRAE Flow 自定义功能演示」功能。</li>
       <li>内置多种支持事件演示，便于用户快速上手制作自己想要的功能。</li>
       <img src="experience-cases/custom-function.jpg" alt="自定义功能演示">
-      <li>点击页面「发送提示」按钮。</li>
+      <li>点击页面「发送提示（测试）」按钮。</li>
     </ol>
 
     <p><strong>预期</strong>：展开态正常渲染交互模板；推送后紧凑态覆盖显示限时提示（默认 5000ms）；到期自动消失。</p>
@@ -626,9 +627,11 @@ xattr -d com.apple.quarantine /Applications/TRAE\ FLOW.app
 
     <ul>
       <li><strong>NewsNow</strong>：启用后加载内置远程实例浏览新闻。</li>
+      <img src="experience-cases/newsnow.jpg" alt="NewsNow">
       <li><strong>Mineradio</strong>：启用后在「设置 > Mineradio」登录网易云 / QQ / 酷狗，播放带歌词歌曲；紧凑态显示歌词，收起后通过离屏窗口保持播放。</li>
+      <img src="experience-cases/trae-flow-mineradio.gif" alt="NewsNow">
     </ul>
-    <img src="experience-cases/images/trae-flow-mineradio.gif" alt="NewsNow">
+
 
     <h3>VC-09 全局快捷键</h3>
 
