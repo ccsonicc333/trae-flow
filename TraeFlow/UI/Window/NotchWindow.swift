@@ -50,8 +50,12 @@ class NotchPanel: NSPanel {
             .ignoresCycle
         ]
 
-        // Above the menu bar
-        level = .mainMenu + 3
+        // Spec: window-level-vs-menubar-hiders —— 窗口层级需高于 iBar / Bartender / Ice 等
+        // 菜单栏图标隐藏类应用的遮罩窗口，否则它们的 overlay 会先拦截鼠标点击，导致
+        // Flow 岛无法点击展开/切换功能。这类应用的遮罩窗口通常位于 `.popUpMenu` (101) 附近，
+        // 因此把 Flow 岛抬到 `.popUpMenu + 50` (151)，盖过绝大多数 menu bar hider 的 overlay，
+        // 同时仍低于 `.screenSaver` (1000)，避免压到系统屏保/锁屏界面。
+        level = NSWindow.Level(rawValue: 151)
 
         // Enable tooltips even when app is inactive (needed for panel windows)
         allowsToolTipsWhenApplicationIsInactive = true
