@@ -69,6 +69,7 @@ final class CustomAreaStore: ObservableObject {
     func bootstrapBuiltInAreasIfNeeded() {
         BridgeRuntimePaths.prepareRuntimeDirectory()
         bootstrapDefaultCustomAreasIfNeeded()
+        refreshDefaultDemoHTMLIfNeeded()
     }
 
     /// Spec: 首次启动注入一个默认自定义功能预设（用户可删除）
@@ -89,6 +90,28 @@ final class CustomAreaStore: ObservableObject {
             htmlContent: Self.testHTMLContent,
             defaultEnabled: true
         )
+        // 标记 HTML 版本为当前版本（首次 seeding 已写入最新内容）
+        defaults.set(Self.defaultDemoHTMLVersion, forKey: Self.defaultDemoHTMLVersionKey)
+    }
+
+    /// Spec: demo-html-version-refresh —— 启动时检查演示页 HTML 版本；若本地落后于当前版本且
+    /// `trae-flow-demo/index.html` 已存在（即用户未删除该预设），则用最新 `testHTMLContent` 覆盖刷新。
+    /// 此机制用于在模板升级时把变更送达老用户；用户若已删除演示页目录则不重建。
+    /// 注意：覆盖会丢失用户对该文件的手动改动；如需自定义请复制为新 area。
+    private func refreshDefaultDemoHTMLIfNeeded() {
+        let stored = defaults.integer(forKey: Self.defaultDemoHTMLVersionKey)
+        guard stored < Self.defaultDemoHTMLVersion else { return }
+
+        let dirURL = BridgeRuntimePaths.customAreasDirectoryURL
+            .appendingPathComponent("trae-flow-demo", isDirectory: true)
+        let htmlURL = dirURL.appendingPathComponent("index.html")
+
+        // 仅当演示页已存在（用户未删除）时覆盖；不主动重建已删除的预设。
+        if FileManager.default.fileExists(atPath: htmlURL.path) {
+            try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+            try? Self.testHTMLContent.data(using: .utf8)?.write(to: htmlURL, options: [.atomic])
+        }
+        defaults.set(Self.defaultDemoHTMLVersion, forKey: Self.defaultDemoHTMLVersionKey)
     }
 
     /// 写入默认预设目录与 index.html，并添加 area 记录（isBuiltIn=false，用户可删除）。
@@ -439,7 +462,14 @@ final class CustomAreaStore: ObservableObject {
         return area
     }
 
-    /// 测试 HTML 内容 —— 演示三个真实交互区块（喝水提醒 / 外部接口 / 系统数据监控）。
+    /// 演示页 HTML 模板版本号；提升此值会在下次启动时通过 `refreshDefaultDemoHTMLIfNeeded`
+    /// 把 `trae-flow-demo/index.html` 覆盖刷新为最新 `testHTMLContent`，用于模板升级送达老用户。
+    /// v1: 初始版本（喝水提醒 / GitHub API JSON / 系统数据监控）。
+    /// v2: 区块 2 改为随机猫咪图片（`https://api.thecatapi.com/v1/images/search`）。
+    private static let defaultDemoHTMLVersion: Int = 2
+    private static let defaultDemoHTMLVersionKey = "traeFlowDefaultDemoHTMLVersion"
+
+    /// 测试 HTML 内容 —— 演示三个真实交互区块（喝水提醒 / 随机猫咪图片 / 系统数据监控）。
     /// 深色圆角卡片风格，与 Flow 岛视觉一致。包含 loading spinner、5 秒超时、
     /// 计数器防抖、错误态橙边、成功态绿边、按钮成功反馈、系统指标进度条等交互打磨。
     /// Spec: demo-redesign-2026 —— 重新设计演示页：毛玻璃卡片 + 渐变标题栏 + SF Symbols 风格图标
@@ -449,6 +479,8 @@ final class CustomAreaStore: ObservableObject {
     /// Spec: water-reminder-integrated-hint —— 推送提示功能集成进喝水提醒卡片，
     /// 「喝一杯水 +1」按钮仅计数；「发送提醒（测试）」按钮读取当前计数推送「已喝水 N 杯」提示并自动收起展开面板；
     /// 「启动定时」按设定间隔（1–240 分钟）自动推送喝水提醒（不收起面板，保持 WebView 存活使定时器持续）。
+    /// Spec: cat-image-block —— 区块 2 由 GitHub API JSON 改为调用 `https://api.thecatapi.com/v1/images/search`
+    /// 获取随机猫咪图片并渲染（保留 5 秒超时、spinner、错误态与成功态），按钮文案「获取随机猫咪」。
     private static let testHTMLContent = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -623,6 +655,14 @@ final class CustomAreaStore: ObservableObject {
   .out.error { border-color: rgba(255,159,10,0.5); }
   .out.success { border-color: rgba(48,209,88,0.5); }
   .out.with-icon { display: flex; align-items: center; gap: 8px; }
+  .out .cat-image {
+    display: block;
+    width: 100%;
+    max-width: 280px;
+    margin: 4px auto 0;
+    border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  }
 
   /* ===== Counter ===== */
   .count-row {
@@ -771,20 +811,20 @@ final class CustomAreaStore: ObservableObject {
     </div>
   </div>
 
-  <!-- 区块 2: 调用外部接口 -->
+  <!-- 区块 2: 调用外部接口获取随机猫咪图片 -->
   <div class="card">
     <div class="card-header">
       <div class="card-icon cyan">
-        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M12 8C8.85 8 6.5 9.79 5.5 12c1 2.21 3.35 4 6.5 4s5.5-1.79 6.5-4c-1-2.21-3.35-4-6.5-4zm0 6.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zM2 6.5C3.5 5 5.5 4 7.5 4l1.5 2.5C8 6.5 7 7 6 7.8 4.5 7.3 3 7.5 2 8.5V6.5zm20 0C20.5 5 18.5 4 16.5 4L15 6.5c1 .5 2 1 3 1.3 1.5-.5 3-.3 4 .7v-2z"/></svg>
       </div>
       <div class="card-title">调用外部接口</div>
     </div>
-    <div class="card-desc">fetch 公开 API <code>https://api.github.com/repos/apple/swift</code> 并渲染返回 JSON 片段；5 秒超时，加载中显示 spinner。</div>
+    <div class="card-desc">fetch 外部公开 API <code>https://api.thecatapi.com/v1/images/search</code> 获取随机猫咪图片并展示；5 秒超时，加载中显示 spinner。</div>
     <div class="btn-row">
-      <button class="primary" onclick="fetchGitHub()">请求 GitHub API</button>
+      <button class="primary" onclick="fetchCat()">获取随机猫咪</button>
       <button onclick="clearFetch()">清空结果</button>
     </div>
-    <div id="fetchOut" class="out muted">点击按钮发起请求。若未开启外部接口将显示提示。</div>
+    <div id="fetchOut" class="out muted">点击按钮获取图片。若未开启外部接口将显示提示。</div>
   </div>
 
   <!-- 区块 3: 系统数据监控 -->
@@ -885,26 +925,32 @@ final class CustomAreaStore: ObservableObject {
       })
     ]);
   }
-  function fetchGitHub() {
+  function fetchCat() {
     var out = document.getElementById("fetchOut");
     out.className = "out with-icon muted";
-    out.innerHTML = '<span class="spinner"></span><span>请求中…</span>';
-    fetchWithTimeout("https://api.github.com/repos/apple/swift", 5000)
+    out.innerHTML = '<span class="spinner"></span><span>加载猫咪中…</span>';
+    fetchWithTimeout("https://api.thecatapi.com/v1/images/search", 5000)
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
       })
       .then(function (data) {
-        var slice = {
-          name: data.name,
-          full_name: data.full_name,
-          stargazers_count: data.stargazers_count,
-          open_issues_count: data.open_issues_count,
-          description: data.description
+        var item = (data && data[0]) || {};
+        var url = item.url;
+        if (!url) throw new Error("响应中未找到图片地址");
+        var img = new Image();
+        img.className = "cat-image";
+        img.onload = function () {
+          out.className = "out success";
+          out.innerHTML = "";
+          out.appendChild(img);
+          setTimeout(function () { out.classList.remove("success"); }, 1500);
         };
-        out.className = "out success";
-        out.textContent = JSON.stringify(slice, null, 2);
-        setTimeout(function () { out.classList.remove("success"); }, 1500);
+        img.onerror = function () {
+          out.className = "out error";
+          out.textContent = "图片加载失败：" + url;
+        };
+        img.src = url;
       })
       .catch(function (err) {
         out.className = "out error";

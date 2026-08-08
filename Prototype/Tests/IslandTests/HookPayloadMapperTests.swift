@@ -596,3 +596,35 @@ func unknownStopVariantFallsBackToCompleted() throws {
     #expect(envelope.eventType == "MysteryStopThing")
     #expect(envelope.status?.kind == .completed)
 }
+
+@Test
+func dualVariantConcurrentSessionsInSameCWDGetDistinctSessionKeys() throws {
+    // Spec: dual-variant-concurrent-session-key
+    // hook 未传 session_id 时，两个 TRAE 变体在同一 cwd 下的并发会话必须生成不同
+    // sessionKey，否则 SessionStore 会把它们合并成一个，导致 Flow Island 右侧
+    // 只显示一个变体。
+    let payload = """
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "prompt": "hello"
+    }
+    """.data(using: .utf8)!
+
+    let traeEnvelope = HookPayloadMapper.makeEnvelope(
+        source: .trae,
+        arguments: ["island-bridge", "--source", "trae"],
+        environment: ["__CFBundleIdentifier": "com.trae.app", "PWD": "/tmp/proj"],
+        stdinData: payload
+    )
+
+    let traeCNEnvelope = HookPayloadMapper.makeEnvelope(
+        source: .trae,
+        arguments: ["island-bridge", "--source", "trae"],
+        environment: ["__CFBundleIdentifier": "cn.trae.app", "PWD": "/tmp/proj"],
+        stdinData: payload
+    )
+
+    #expect(traeEnvelope.sessionKey != traeCNEnvelope.sessionKey)
+    #expect(traeEnvelope.sessionKey == "trae:trae:/tmp/proj")
+    #expect(traeCNEnvelope.sessionKey == "trae:trae-cn:/tmp/proj")
+}

@@ -199,7 +199,31 @@ public enum HookPayloadMapper {
             return "\(provider.rawValue):\(value)"
         }
         let cwd = detectCWD(payload: payload, environment: environment) ?? "unknown"
+        // Spec: dual-variant-concurrent-session-key
+        // hook 未传 session_id 时回退到 cwd，需拼入变体标识，避免不同 TRAE 变体
+        // 在同一 cwd 下的并发会话生成相同 sessionId 而被 SessionStore 合并成一个，
+        // 导致 Flow Island 右侧只显示一个变体。
+        if let variantKey = traVariantKey(from: environment) {
+            return "\(provider.rawValue):\(variantKey):\(cwd)"
+        }
         return "\(provider.rawValue):\(cwd)"
+    }
+
+    /// 从 `__CFBundleIdentifier` 环境变量提取 TRAE 变体标识（rawValue），
+    /// 用于 cwd 回退时区分四个 TRAE 变体的并发会话。不依赖主 app 的 TraeVariant 类型。
+    private static func traVariantKey(from environment: [String: String]) -> String? {
+        guard let bundleID = nonEmpty(environment["__CFBundleIdentifier"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() else {
+            return nil
+        }
+        switch bundleID {
+        case "com.trae.app": return "trae"
+        case "cn.trae.app": return "trae-cn"
+        case "com.trae.solo.app": return "trae-work"
+        case "cn.trae.solo.app": return "trae-work-cn"
+        default: return nil
+        }
     }
 
     private static func detectStatus(

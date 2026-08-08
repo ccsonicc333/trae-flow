@@ -591,7 +591,7 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
-    /// 鼠标悬停是否自动展开 Flow 岛（默认开启，保持向后兼容）。
+    /// 鼠标悬停是否自动展开 Flow 岛（默认关闭）。
     /// 关闭后鼠标移入触发区不会启动 hover 展开计时器，仅保留点击展开入口。
     @Published var openOnHover: Bool {
         didSet {
@@ -1540,7 +1540,7 @@ final class AppSettingsStore: ObservableObject {
             from: defaults,
             key: Keys.openOnHover,
             exists: persistedKeys.contains(Keys.openOnHover),
-            default: true
+            default: false
         ))
         _isPanelPinned = Published(initialValue: Self.boolValue(
             from: defaults,

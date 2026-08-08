@@ -1709,6 +1709,14 @@ actor SessionStore {
             guard existingId != newSessionId else { continue }
             guard existing.provider == provider else { continue }
             guard existing.cwd == cwd else { continue }
+            // Spec: dual-variant-concurrent-session-key
+            // 不同 TRAE 变体（Trae / Trae CN / Trae Work / Trae Work CN）在同一 cwd 下
+            // 可合法并发，不应互相清理。仅当两会话解析到同一变体（或都无法解析）时才清理。
+            let existingVariant = TraeVariant.fromBundleIdentifier(existing.clientInfo.bundleIdentifier)
+            let newVariant = TraeVariant.fromBundleIdentifier(session.clientInfo.bundleIdentifier)
+            if let existingVariant, let newVariant, existingVariant != newVariant {
+                continue
+            }
             guard existing.phase != .ended else { continue }
             guard !existing.needsManualAttention else { continue }
 
