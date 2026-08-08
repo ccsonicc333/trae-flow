@@ -16,6 +16,117 @@ struct CustomAreaWebView: NSViewRepresentable {
     /// JS Bridge 收起展开面板处理器 —— HTML 端通过 `window.webkit.messageHandlers.traeFlowCollapse.postMessage(...)` 收起 Flow 岛展开面板
     static let collapseMessageHandlerName = "traeFlowCollapse"
 
+    /// Spec: network-block-injection —— 当 `allowsNetworkAccess == false` 时注入的 JS 脚本，
+    /// 拦截 `window.fetch` 与 `XMLHttpRequest`，使其立即 reject（抛出 "网络访问已被禁用" 错误）。
+    /// 原因：fetch/XHR 不触发 `decidePolicyFor navigationAction`，仅靠 navigation delegate
+    /// 无法拦截 JS 发起的网络请求；必须在 atDocumentStart 注入脚本从源头阻断。
+    /// 保留 `traeFlowMetrics` / `traeFlowHint` / `traeFlowCollapse` 消息通道（用于 JS Bridge）。
+    static let networkBlockScript = """
+    (function () {
+      var blockedMsg = "网络访问已被禁用（未开启允许请求外部接口）";
+      var allowedHosts = ["messageHandlers.traeFlowHint", "messageHandlers.traeFlowMetrics", "messageHandlers.traeFlowCollapse"];
+      function isAllowed(url) {
+        try {
+          var u = new URL(url, location.href);
+          // 允许 file: / trae-flow-local: 本地资源
+          return u.protocol === "file:" || u.protocol === "trae-flow-local:";
+        } catch (e) { return false; }
+      }
+      // 拦截 fetch
+      if (window.fetch) {
+        var origFetch = window.fetch;
+        window.fetch = function (input, init) {
+          var url = typeof input === "string" ? input : (input && input.url) || "";
+          if (isAllowed(url)) return origFetch.apply(this, arguments);
+          return Promise.reject(new TypeError(blockedMsg));
+        };
+      }
+      // 拦截 XMLHttpRequest
+      if (window.XMLHttpRequest) {
+        var origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function (method, url) {
+          if (!isAllowed(url)) {
+            this._traeFlowBlocked = true;
+            this._traeFlowBlockedMsg = blockedMsg;
+          }
+          return origOpen.apply(this, arguments);
+        };
+        var origSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function () {
+          if (this._traeFlowBlocked) {
+            Object.defineProperty(this, "status", { value: 0 });
+            Object.defineProperty(this, "readyState", { value: 4 });
+            if (typeof this.onerror === "function") {
+              var self = this;
+              setTimeout(function () { self.onerror(new Event("error")); }, 0);
+            }
+            return;
+          }
+          return origSend.apply(this, arguments);
+        };
+      }
+      // 拦截 Navigator.sendBeacon
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon = function (url) {
+          if (isAllowed(url)) return true;
+          return false;
+        };
+      }
+    })();
+    """
+
+    /// Spec: network-block-content-rule-list —— WKContentRuleList 标识符
+    /// 用于在 `WKContentRuleListStore` 中编译/获取网络拦截规则（block 所有 http/https 请求）。
+    private static let networkBlockRuleListIdentifier = "ai.traeflow.app.networkBlock"
+
+    /// Spec: network-block-content-rule-list —— 规则 JSON：block 所有 http/https 请求
+    /// `file:` / `trae-flow-local:` 协议不在 url-filter 范围内，本地资源不受影响。
+    /// WKContentRuleList 在 WebKit 网络层拦截，JS 无法绕过（含 fetch / XHR / 资源加载）。
+    private static let networkBlockRuleListJSON = """
+    [{"trigger":{"url-filter":"https?://.*"},"action":{"type":"block"}}]
+    """
+
+    /// Spec: network-block-content-rule-list —— 内存缓存的 WKContentRuleList
+    /// 首次获取后缓存，避免每次创建 WebView 都触发 store I/O。
+    private static var cachedNetworkBlockRule: WKContentRuleList?
+    private static let cachedNetworkBlockRuleLock = NSLock()
+
+    /// Spec: network-block-content-rule-list —— 获取网络拦截规则
+    /// 优先从内存缓存取，其次从 `WKContentRuleListStore` 读取已编译的，不存在则编译。
+    /// `WKContentRuleListStore` 是 `@MainActor`，completion 在主线程回调。
+    static func loadNetworkBlockRule(completion: @escaping (WKContentRuleList?) -> Void) {
+        cachedNetworkBlockRuleLock.lock()
+        if let cached = cachedNetworkBlockRule {
+            cachedNetworkBlockRuleLock.unlock()
+            completion(cached)
+            return
+        }
+        cachedNetworkBlockRuleLock.unlock()
+
+        guard let store = WKContentRuleListStore.default() else {
+            completion(nil)
+            return
+        }
+
+        Task { @MainActor in
+            // 先尝试读取已编译的
+            var ruleList = try? await store.contentRuleList(forIdentifier: networkBlockRuleListIdentifier)
+            if ruleList == nil {
+                // 不存在，编译并持久化（下次启动可直接读取）
+                ruleList = try? await store.compileContentRuleList(
+                    forIdentifier: networkBlockRuleListIdentifier,
+                    encodedContentRuleList: networkBlockRuleListJSON
+                )
+            }
+            if let ruleList = ruleList {
+                cachedNetworkBlockRuleLock.lock()
+                cachedNetworkBlockRule = ruleList
+                cachedNetworkBlockRuleLock.unlock()
+            }
+            completion(ruleList)
+        }
+    }
+
     /// WebView 内容源
     enum ContentSource: Equatable {
         /// 本地自定义区域目录
@@ -112,6 +223,16 @@ struct CustomAreaWebView: NSViewRepresentable {
         // Spec: 仅在不允许外部网络时注册本地 scheme handler（限制外部资源）
         if !source.allowsNetworkAccess {
             configuration.setURLSchemeHandler(LocalFileSchemeHandler(), forURLScheme: "trae-flow-local")
+            // Spec: network-block-injection —— fetch/XHR 不触发 decidePolicyFor navigationAction
+            // （它们走 WebKit NetworkProcess，不经 navigation delegate）。当不允许外部网络时，
+            // 注入 WKUserScript 在 atDocumentStart 拦截 window.fetch 与 XMLHttpRequest，
+            // 使其立即 reject，从源头阻断外部请求（无论同源/跨域/资源加载均覆盖）。
+            let blockScript = WKUserScript(
+                source: Self.networkBlockScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false
+            )
+            configuration.userContentController.addUserScript(blockScript)
         }
 
         // Spec: 注册 JS Bridge —— 自定义 HTML 提示消息通道
@@ -180,7 +301,24 @@ struct CustomAreaWebView: NSViewRepresentable {
             CustomAreaWebViewCache.shared.storeWebView(webView, for: cachedURL)
         }
 
-        loadArea(into: webView, context: context)
+        // Spec: network-block-content-rule-list —— 不允许外部网络时，异步获取
+        // WKContentRuleList 并添加到 userContentController，再加载页面。
+        // WKContentRuleList 在 WebKit 网络层 block 所有 http/https 请求（含 fetch/XHR/资源），
+        // 与 navigation delegate + JS 注入三层叠加，JS 完全无法绕过。
+        // 允许外部网络时直接加载（无需规则）。
+        if source.allowsNetworkAccess {
+            loadArea(into: webView, context: context)
+        } else {
+            Self.loadNetworkBlockRule { ruleList in
+                DispatchQueue.main.async {
+                    if let ruleList = ruleList {
+                        webView.configuration.userContentController.add(ruleList)
+                    }
+                    // 无论是否获取到规则都加载页面（JS 拦截脚本已注入作为 fallback）
+                    loadArea(into: webView, context: context)
+                }
+            }
+        }
         return webView
     }
 
@@ -388,7 +526,8 @@ struct CustomAreaWebView: NSViewRepresentable {
         /// - `.remoteURL` 源同 host 的主框架导航在 WebView 内继续；
         /// - `.localArea` 源所有 http/https 主框架导航一律转系统浏览器（本地 HTML 不会与外部站点同源）；
         /// - `.mineradio` 源所有 http/https 主框架导航在 WebView 内（允许跨 host，OAuth 回调可能跳转其他 host）；
-        /// - 子框架/资源请求（图片/JS/css/fetch 等）按 `allowsNetworkAccess` 决定；
+        /// - 子框架/资源请求（图片/JS/css/iframe 等，非链接点击）按 `allowsNetworkAccess` 决定；
+        ///   注意：`fetch` / `XMLHttpRequest` 不经此 delegate，由 `networkBlockScript` 在 JS 层拦截；
         /// - `file` / `trae-flow-local` 始终放行；其他 scheme 一律取消。
         /// Spec: mineradio-bridge-compat-layer
         func webView(
@@ -432,7 +571,8 @@ struct CustomAreaWebView: NSViewRepresentable {
                         decisionHandler(.cancel)
                     }
                 } else {
-                    // 子框架/资源请求（图片/JS/css/fetch 等，非链接点击）按 allowsNetworkAccess 决定
+                    // 子框架/资源请求（图片/JS/css/iframe 等，非链接点击）按 allowsNetworkAccess 决定
+                    // 注意：fetch / XMLHttpRequest 不经此 delegate，由 networkBlockScript 在 JS 层拦截
                     if allowsNetworkAccess {
                         decisionHandler(.allow)
                     } else {

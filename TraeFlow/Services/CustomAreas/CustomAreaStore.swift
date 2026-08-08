@@ -466,7 +466,9 @@ final class CustomAreaStore: ObservableObject {
     /// 把 `trae-flow-demo/index.html` 覆盖刷新为最新 `testHTMLContent`，用于模板升级送达老用户。
     /// v1: 初始版本（喝水提醒 / GitHub API JSON / 系统数据监控）。
     /// v2: 区块 2 改为随机猫咪图片（`https://api.thecatapi.com/v1/images/search`）。
-    private static let defaultDemoHTMLVersion: Int = 2
+    /// v3: 区块 2 增加备用 API fallback 链（The Cat API → Cat as a Service → The Dog API 兜底）。
+    /// v4: 图片加载阶段增加 images.weserv.nl 代理 fallback，保证国内网络也能正常显示。
+    private static let defaultDemoHTMLVersion: Int = 4
     private static let defaultDemoHTMLVersionKey = "traeFlowDefaultDemoHTMLVersion"
 
     /// 测试 HTML 内容 —— 演示三个真实交互区块（喝水提醒 / 随机猫咪图片 / 系统数据监控）。
@@ -481,6 +483,11 @@ final class CustomAreaStore: ObservableObject {
     /// 「启动定时」按设定间隔（1–240 分钟）自动推送喝水提醒（不收起面板，保持 WebView 存活使定时器持续）。
     /// Spec: cat-image-block —— 区块 2 由 GitHub API JSON 改为调用 `https://api.thecatapi.com/v1/images/search`
     /// 获取随机猫咪图片并渲染（保留 5 秒超时、spinner、错误态与成功态），按钮文案「获取随机猫咪」。
+    /// Spec: cat-image-fallback —— 主 API（The Cat API）失败时依次尝试备用源
+    /// （Cat as a Service → The Dog API 兜底），任一成功即渲染并标注来源，全部失败才报错。
+    /// Spec: cat-image-cn-proxy —— 图片加载阶段增加 images.weserv.nl 代理 fallback：
+    /// 每个源拿到图片 URL 后先直接加载，失败则通过 images.weserv.nl（全球 CDN，国内访问稳定）
+    /// 代理加载，保证国内网络也能正常显示图片。3 个 API 源 × 2 种加载方式 = 6 种尝试。
     private static let testHTMLContent = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -663,6 +670,13 @@ final class CustomAreaStore: ObservableObject {
     border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.4);
   }
+  .out .cat-source {
+    font-size: 9px;
+    color: var(--text-tertiary);
+    text-align: right;
+    margin-top: 4px;
+    font-family: "SF Mono", ui-monospace, monospace;
+  }
 
   /* ===== Counter ===== */
   .count-row {
@@ -819,7 +833,7 @@ final class CustomAreaStore: ObservableObject {
       </div>
       <div class="card-title">调用外部接口</div>
     </div>
-    <div class="card-desc">fetch 外部公开 API <code>https://api.thecatapi.com/v1/images/search</code> 获取随机猫咪图片并展示；5 秒超时，加载中显示 spinner。</div>
+    <div class="card-desc">fetch API 获取随机猫咪图片并展示；加载中显示 spinner。</div>
     <div class="btn-row">
       <button class="primary" onclick="fetchCat()">获取随机猫咪</button>
       <button onclick="clearFetch()">清空结果</button>
@@ -925,37 +939,88 @@ final class CustomAreaStore: ObservableObject {
       })
     ]);
   }
+  // Spec: cat-image-fallback —— 主 API（The Cat API）失败时依次尝试备用源
+  // （Cat as a Service → The Dog API 兜底），任一成功即渲染，全部失败才报错。
+  // Spec: cat-image-cn-proxy —— 图片加载阶段增加 images.weserv.nl 代理 fallback：
+  // 每个源拿到图片 URL 后先直接加载，失败则通过 images.weserv.nl（全球 CDN，国内访问稳定）
+  // 代理加载，保证国内网络也能正常显示图片。3 个 API 源 × 2 种加载方式 = 6 种尝试。
+  var CAT_SOURCES = [
+    {
+      name: "The Cat API",
+      url: "https://api.thecatapi.com/v1/images/search",
+      parse: function (data) { return ((data && data[0]) || {}).url; }
+    },
+    {
+      name: "Cat as a Service",
+      url: "https://cataas.com/cat?json=true",
+      parse: function (data) { return data && data.url; }
+    },
+    {
+      name: "The Dog API (兜底)",
+      url: "https://api.thedogapi.com/v1/images/search",
+      parse: function (data) { return ((data && data[0]) || {}).url; }
+    }
+  ];
+  // images.weserv.nl 图片代理（全球 CDN，国内访问稳定），用于图片加载失败时 fallback
+  function proxyImageUrl(url) {
+    var stripped = url.replace("https://", "").replace("http://", "");
+    return "https://images.weserv.nl/?url=" + encodeURIComponent(stripped);
+  }
+  // 加载图片：先直接加载，失败则用 images.weserv.nl 代理加载
+  function loadImageWithFallback(url, onLoad, onError) {
+    var img = new Image();
+    img.className = "cat-image";
+    img.onload = function () { onLoad(img); };
+    img.onerror = function () {
+      var proxyImg = new Image();
+      proxyImg.className = "cat-image";
+      proxyImg.onload = function () { onLoad(proxyImg); };
+      proxyImg.onerror = onError;
+      proxyImg.src = proxyImageUrl(url);
+    };
+    img.src = url;
+  }
   function fetchCat() {
     var out = document.getElementById("fetchOut");
     out.className = "out with-icon muted";
     out.innerHTML = '<span class="spinner"></span><span>加载猫咪中…</span>';
-    fetchWithTimeout("https://api.thecatapi.com/v1/images/search", 5000)
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      })
-      .then(function (data) {
-        var item = (data && data[0]) || {};
-        var url = item.url;
-        if (!url) throw new Error("响应中未找到图片地址");
-        var img = new Image();
-        img.className = "cat-image";
-        img.onload = function () {
-          out.className = "out success";
-          out.innerHTML = "";
-          out.appendChild(img);
-          setTimeout(function () { out.classList.remove("success"); }, 1500);
-        };
-        img.onerror = function () {
-          out.className = "out error";
-          out.textContent = "图片加载失败：" + url;
-        };
-        img.src = url;
-      })
-      .catch(function (err) {
+
+    function trySource(index) {
+      if (index >= CAT_SOURCES.length) {
         out.className = "out error";
-        out.textContent = "请求失败：" + err.message + "\\n（未开启外部接口？请在设置中开启）";
-      });
+        out.textContent = "所有图片源均不可用\\n（未开启外部接口？请在设置中开启）";
+        return;
+      }
+      var source = CAT_SOURCES[index];
+      fetchWithTimeout(source.url, 5000)
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          var url = source.parse(data);
+          if (!url) throw new Error("响应中未找到图片地址");
+          loadImageWithFallback(url, function (img) {
+            out.className = "out success";
+            out.innerHTML = "";
+            out.appendChild(img);
+            var badge = document.createElement("div");
+            badge.className = "cat-source";
+            badge.textContent = "来源：" + source.name;
+            out.appendChild(badge);
+            setTimeout(function () { out.classList.remove("success"); }, 1500);
+          }, function () {
+            // 图片加载失败（直接 + 代理都失败），尝试下一个备用源
+            trySource(index + 1);
+          });
+        })
+        .catch(function () {
+          // 当前源请求失败，尝试下一个备用源
+          trySource(index + 1);
+        });
+    }
+
+    trySource(0);
   }
   function clearFetch() {
     var out = document.getElementById("fetchOut");
