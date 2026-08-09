@@ -39,7 +39,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
-        NSApplication.shared.setActivationPolicy(launchConfiguration.activationPolicy)
+        NSApplication.shared.setActivationPolicy(
+            launchConfiguration.isRunningTests
+                ? launchConfiguration.activationPolicy
+                : (AppSettings.shared.showDockIcon ? .regular : .accessory)
+        )
 
         let launchFlow = AppLaunchFlow(
             configuration: launchConfiguration,

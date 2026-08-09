@@ -420,6 +420,8 @@ final class AppSettingsStore: ObservableObject {
         static let hookDebugLogRetentionDays = "hookDebugLogRetentionDays"
         static let hookDebugLogMaxDirectoryMegabytes = "hookDebugLogMaxDirectoryMegabytes"
         static let traeToolApprovalMode = "traeToolApprovalMode"
+        // Spec: Dock 栏应用图标显示开关 —— 关闭后应用仅在菜单栏运行（accessory），不再显示在 Dock 中
+        static let showDockIcon = "showDockIcon"
     }
 
     // MARK: - Published Settings
@@ -890,6 +892,15 @@ final class AppSettingsStore: ObservableObject {
         didSet {
             guard !isBootstrapping else { return }
             defaults.set(automaticUpdateChecksEnabled, forKey: Keys.automaticUpdateChecksEnabled)
+        }
+    }
+
+    /// 是否在 Dock 中显示应用图标（默认 true）。关闭后切换为 accessory 策略，
+    /// 应用仅在菜单栏运行。activationPolicy 的实际切换由调用方负责。
+    @Published var showDockIcon: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            defaults.set(showDockIcon, forKey: Keys.showDockIcon)
         }
     }
 
@@ -1680,6 +1691,12 @@ final class AppSettingsStore: ObservableObject {
             from: defaults,
             key: Keys.automaticUpdateChecksEnabled,
             exists: persistedKeys.contains(Keys.automaticUpdateChecksEnabled),
+            default: true
+        ))
+        _showDockIcon = Published(initialValue: Self.boolValue(
+            from: defaults,
+            key: Keys.showDockIcon,
+            exists: persistedKeys.contains(Keys.showDockIcon),
             default: true
         ))
         _mascotOverrides = Published(initialValue: migratedThemeOverrides)

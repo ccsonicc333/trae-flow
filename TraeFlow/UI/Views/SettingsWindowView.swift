@@ -1458,6 +1458,19 @@ private struct SettingsPanelContentView: View {
                 )
                 SettingsLineDivider()
 
+                SettingsToggleLine(
+                    title: "在 Dock 中显示图标",
+                    subtitle: "关闭后应用仅在菜单栏运行，不再出现在 Dock 中",
+                    isOn: Binding(
+                        get: { settings.showDockIcon },
+                        set: { newValue in
+                            settings.showDockIcon = newValue
+                            NSApplication.shared.setActivationPolicy(newValue ? .regular : .accessory)
+                        }
+                    )
+                )
+                SettingsLineDivider()
+
                 SettingsInfoLine(title: "显示器", subtitle: "选择 Flow岛 所在显示器") {
                     screenPicker
                 }

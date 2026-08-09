@@ -538,11 +538,16 @@ class NotchViewModel: ObservableObject {
         guard shouldUseEdgeReveal != isFullscreenEdgeRevealActive else { return }
         isFullscreenEdgeRevealActive = shouldUseEdgeReveal
 
+        // Spec: 用户主动展开（快捷键/点击，openReason == .click）时，全屏隐藏/边缘揭示
+        // 不强制收起面板——快捷键是用户明确意图，应突破被动隐藏限制。
+        // 被动展开（hover/notification/boot）仍被全屏隐藏抑制。
+        let shouldRespectFullscreenHide = !(status == .opened && openReason == .click)
+
         if shouldUseEdgeReveal {
             hoverTimer?.cancel()
             hoverTimer = nil
             isHovering = false
-            if status == .opened {
+            if shouldRespectFullscreenHide, status == .opened {
                 notchClose()
             }
         }
@@ -551,7 +556,7 @@ class NotchViewModel: ObservableObject {
             hoverTimer?.cancel()
             hoverTimer = nil
             isHovering = false
-            if status == .opened {
+            if shouldRespectFullscreenHide, status == .opened {
                 notchClose()
             }
         }
@@ -713,7 +718,11 @@ class NotchViewModel: ObservableObject {
             }
         case .closed, .popping:
             dragStartedInsideOpenedPanel = false
-            if detachmentTriggerScreenRect.contains(location) {
+            // Spec: 仅 docked 状态下触发拖拽分离手势；宠物已分离到桌面时 docked notch
+            // 上无宠物可拖，点击应直接展开面板（右侧任务列表 / 左侧功能），否则
+            // mouseDown 会进入 detachment 跟踪，而 mouseUp 的 detached guard 会拦截
+            // 短按展开逻辑，导致分离态下 docked Flow 岛无法展开。
+            if presentationMode == .docked, detachmentTriggerScreenRect.contains(location) {
                 beginDockedDetachmentTracking(source: .closed, startLocation: location)
             } else if isPointInHoverTrigger(location) {
                 // Spec 2.4: 左半区展开自定义内容面板，右半区展开会话列表。
@@ -778,6 +787,10 @@ class NotchViewModel: ObservableObject {
     /// 需用户前往设置手动打开后才会再次响应文件拖拽。
     private func handleFileDragHover(at location: CGPoint) {
         guard hasFileURLsOnDragPasteboard else { return }
+        // Spec: 宠物拖拽分离手势进行中时不响应文件拖拽，避免 dragPboard 残留 URL
+        // 导致误切换到中转站。真正的文件拖拽 mouseDown 落在 Finder 等外部应用，
+        // 不会启动 detachment tracking，因此此 guard 不影响文件拖入中转站功能。
+        guard detachmentTracking == nil else { return }
         // Spec: resize handle 拖拽期间全局 mouseDragged 仍会触发此回调；
         // dragPboard 可能残留之前文件拖拽的 URL，导致误切换到中转站。
         // 双重 guard：DragGesture 标志 + mouseDown 起点标志，覆盖 SwiftUI 手势与
@@ -893,6 +906,12 @@ class NotchViewModel: ObservableObject {
     }
 
     var shouldHideWindowPresentation: Bool {
+        // Spec: 用户主动展开（快捷键/点击，openReason == .click）时突破全屏隐藏限制，
+        // 窗口保持可见。被动展开（hover/notification）仍受全屏隐藏抑制。
+        // 关闭后面板 status == .closed，自然回到全屏隐藏状态。
+        if status == .opened && openReason == .click {
+            return false
+        }
         // 宠物分离态不再隐藏 Flow 岛：胶囊继续展示，仅在 NotchView 中隐藏宠物。
         if isFullscreenBrowserHiddenActive {
             return true
