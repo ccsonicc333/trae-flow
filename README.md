@@ -2,7 +2,7 @@
   TRAE FLOW
 </h1>
 <p align="center">
-  <b>利用 TRAE 的能力 · 创建专属于你的 Mac 灵动岛</b><br>
+  <b>利用 TRAE 的能力 · 创建专属于你的 Mac 灵动岛工作台</b><br>
   <a href="#安装">安装</a> •
   <a href="#三条主线">三条主线</a> •
   <a href="#功能">功能</a> •
@@ -24,7 +24,7 @@
 
 ## 什么是 TRAE FLOW？
 
-**TRAE FLOW 的核心理念是「利用 TRAE 的能力创建专属于你的 Mac 灵动岛」。**
+**TRAE FLOW 的核心理念是「利用 TRAE 的能力创建专属于你的 Mac 灵动岛工作台」。**
 
 它同时解决了三件事：
 
@@ -180,14 +180,14 @@ TRAE 和 TRAE CN 通过 Trae 官方 Hook 协议提供完整事件流支持。**�
 
 #### 内置宠物主题包
 
-| 宠物             | ID           | 类型 |
-| -------------- | ------------ | -- |
-| **TRAE FLOW**  | `traeflow`   | 默认 |
-| **月薪喵**        | `yuexinmiao` | 动物 |
-| **光环小猫**       | `halokitten` | 动物 |
-| **Frieren**    | `frieren`    | 人物 |
-| **Shinchan**   | `shinchan`   | 未知 |
-| **TaoTao**     | `taotao`     | 人物 |
+| 宠物            | ID           | 类型 |
+| ------------- | ------------ | -- |
+| **TRAE FLOW** | `traeflow`   | 默认 |
+| **月薪喵**       | `yuexinmiao` | 动物 |
+| **光环小猫**      | `halokitten` | 动物 |
+| **Frieren**   | `frieren`    | 人物 |
+| **Shinchan**  | `shinchan`   | 未知 |
+| **TaoTao**    | `taotao`     | 人物 |
 
 宠物主题包遵循 Codex 规范的 8 列 × 9 行宠物表格式（1536×1872，每帧 192×208），支持在设置面板中切换、预览，也支持从 `~/.traeflow/pets/` 或 `~/.codex/pets/` 加载自定义宠物。
 
