@@ -47,10 +47,14 @@ final class GlobalShortcutManager {
     private init() {
         installEventHandlerIfNeeded()
 
+        // @Published 在 willSet 时刻同步发送事件，此时 wrappedValue 尚未更新；
+        // 用 .receive(on: RunLoop.main) 把 sink 调度到下一 runloop tick，
+        // 确保 refreshRegistrations 读到落地后的新值（否则录制/复原均不生效）。
         Publishers.CombineLatest(
             AppSettings.shared.$openActiveSessionShortcut,
             AppSettings.shared.$openSessionListShortcut
         )
+        .receive(on: RunLoop.main)
         .sink { [weak self] _, _ in
             self?.refreshRegistrations()
         }
@@ -58,6 +62,7 @@ final class GlobalShortcutManager {
 
         // 修饰键模板变化 → 刷新位置式快捷键注册
         AppSettings.shared.$leftFeatureQuickExpandShortcut
+            .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.refreshRegistrations()
             }
