@@ -1539,7 +1539,7 @@ final class AppSettingsStore: ObservableObject {
             from: defaults,
             key: Keys.autoCollapseOnLeave,
             exists: persistedKeys.contains(Keys.autoCollapseOnLeave),
-            default: true
+            default: false
         ))
         _alwaysExpandFlowIsland = Published(initialValue: Self.boolValue(
             from: defaults,

@@ -2676,20 +2676,21 @@ private struct SettingsPanelContentView: View {
         return installedAt
     }
 
+    // 更新区域文字统一固定为中文，避免应用/系统语言切换时中英混杂。
     private var updateTitle: String {
         switch updateManager.state {
         case .idle, .upToDate:
-            return AppLocalization.string("检查更新")
+            return "检查更新"
         case .checking:
-            return AppLocalization.string("检查中...")
+            return "检查中..."
         case .found, .downloading, .extracting:
-            return AppLocalization.string("静默更新中")
+            return "静默更新中"
         case .readyToInstall:
-            return AppLocalization.string("等待重启安装")
+            return "等待重启安装"
         case .installing:
-            return AppLocalization.string("正在安装更新")
+            return "正在安装更新"
         case .error:
-            return AppLocalization.string("重试更新")
+            return "重试更新"
         }
     }
 
@@ -2697,28 +2698,26 @@ private struct SettingsPanelContentView: View {
         switch updateManager.state {
         case .idle:
             return updateManager.isConfigured
-                ? AppLocalization.string(
-                    settings.automaticUpdateChecksEnabled
-                        ? "启动时和空闲时自动检查、下载并安装更新"
-                        : "自动更新已关闭，可随时手动检查"
-                )
+                ? (settings.automaticUpdateChecksEnabled
+                    ? "启动时和空闲时自动检查、下载并安装更新"
+                    : "自动更新已关闭，可随时手动检查")
                 : updateManager.configurationStatus.message
         case .upToDate:
-            return AppLocalization.string("当前已经是最新版本")
+            return "当前已经是最新版本"
         case .checking:
-            return AppLocalization.string("正在后台检查更新")
+            return "正在后台检查更新"
         case .found(let version, _):
-            return AppLocalization.format("发现新版本 v%@，将静默下载并安装", version)
+            return String(format: "发现新版本 v%@，将静默下载并安装", version)
         case .downloading:
-            return AppLocalization.string("正在后台下载更新")
+            return "正在后台下载更新"
         case .extracting:
-            return AppLocalization.string("正在准备安装更新")
+            return "正在准备安装更新"
         case .readyToInstall(let version):
-            return AppLocalization.format("v%@ 已就绪，可立即重启安装，或等空闲时自动安装", version)
+            return String(format: "v%@ 已就绪，可立即重启安装，或等空闲时自动安装", version)
         case .installing:
-            return AppLocalization.string("正在静默安装并重启")
+            return "正在静默安装并重启"
         case .error:
-            return AppLocalization.string("后台更新失败，点击后重新检查")
+            return "后台更新失败，点击后重新检查"
         }
     }
 
@@ -2729,7 +2728,7 @@ private struct SettingsPanelContentView: View {
             ProgressView()
                 .controlSize(.small)
         case .upToDate:
-            Text(appLocalized: "最新")
+            Text("最新")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(TerminalColors.green)
                 .lineLimit(1)
