@@ -86,6 +86,24 @@ struct CustomAreaWebView: NSViewRepresentable {
     [{"trigger":{"url-filter":"https?://.*"},"action":{"type":"block"}}]
     """
 
+    /// Spec: scrollbar-style-injection —— 为本地自定义区域 HTML 注入深色半透明滚动条样式，
+    /// 避免 WebKit 在透明背景下显示与 Flow Island 深色主题不协调的浅色系统滚动条。
+    static let scrollbarStyleScript = """
+    (function () {
+        var css = `
+            html { color-scheme: dark; }
+            ::-webkit-scrollbar { width: 8px; height: 8px; }
+            ::-webkit-scrollbar-track { background: transparent; }
+            ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); border-radius: 4px; }
+            ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.35); }
+            ::-webkit-scrollbar-corner { background: transparent; }
+        `;
+        var style = document.createElement("style");
+        style.textContent = css;
+        (document.head || document.documentElement).appendChild(style);
+    })();
+    """
+
     /// Spec: network-block-content-rule-list —— 内存缓存的 WKContentRuleList
     /// 首次获取后缓存，避免每次创建 WebView 都触发 store I/O。
     private static var cachedNetworkBlockRule: WKContentRuleList?
@@ -233,6 +251,16 @@ struct CustomAreaWebView: NSViewRepresentable {
                 forMainFrameOnly: false
             )
             configuration.userContentController.addUserScript(blockScript)
+        }
+
+        // Spec: scrollbar-style-injection —— 本地自定义区域统一深色滚动条，与 Flow Island 深色主题协调
+        if case .localArea = source {
+            let scrollbarScript = WKUserScript(
+                source: Self.scrollbarStyleScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false
+            )
+            configuration.userContentController.addUserScript(scrollbarScript)
         }
 
         // Spec: 注册 JS Bridge —— 自定义 HTML 提示消息通道
