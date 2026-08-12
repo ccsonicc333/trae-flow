@@ -82,13 +82,17 @@ final class CustomAreaStore: ObservableObject {
         // 预设 1：TRAE Flow 自定义功能演示页（图标文字「演示」，允许外部接口）
         // Spec: demo-preset-default-enabled —— 演示页默认启用，配合音乐/中转站作为开箱即用的功能展示
         // Spec: upgrade-demo-html-to-four-blocks —— 使用四个真实交互区块 HTML（testHTMLContent）
+        // Spec: demo-preset-default-expanded-size —— 演示页内容较多（Hero + CTA + 三个区块），
+        // 默认展开尺寸 720×850 以保证首次打开即可完整呈现，避免内容被裁剪需要手动拖拽。
         _ = seedDefaultCustomArea(
             directoryName: "trae-flow-demo",
             name: "TRAE Flow 自定义功能演示",
             iconName: "text:演示",
             allowsNetworkAccess: true,
             htmlContent: Self.testHTMLContent,
-            defaultEnabled: true
+            defaultEnabled: true,
+            defaultExpandedWidth: 720,
+            defaultExpandedHeight: 850
         )
         // 标记 HTML 版本为当前版本（首次 seeding 已写入最新内容）
         defaults.set(Self.defaultDemoHTMLVersion, forKey: Self.defaultDemoHTMLVersionKey)
@@ -124,7 +128,9 @@ final class CustomAreaStore: ObservableObject {
         iconName: String?,
         allowsNetworkAccess: Bool,
         htmlContent: String,
-        defaultEnabled: Bool = true
+        defaultEnabled: Bool = true,
+        defaultExpandedWidth: Double? = nil,
+        defaultExpandedHeight: Double? = nil
     ) -> CustomArea? {
         let dirURL = BridgeRuntimePaths.customAreasDirectoryURL
             .appendingPathComponent(directoryName, isDirectory: true)
@@ -159,7 +165,13 @@ final class CustomAreaStore: ObservableObject {
         )
         areas.append(area)
         persist()
-        LeftFeatureStore.shared.appendCustomAreaFeature(areaID: area.id, isEnabled: defaultEnabled, iconName: iconName)
+        LeftFeatureStore.shared.appendCustomAreaFeature(
+            areaID: area.id,
+            isEnabled: defaultEnabled,
+            iconName: iconName,
+            expandedWidth: defaultExpandedWidth,
+            expandedHeight: defaultExpandedHeight
+        )
         return area
     }
 
@@ -468,7 +480,9 @@ final class CustomAreaStore: ObservableObject {
     /// v2: 区块 2 改为随机猫咪图片（`https://api.thecatapi.com/v1/images/search`）。
     /// v3: 区块 2 增加备用 API fallback 链（The Cat API → Cat as a Service → The Dog API 兜底）。
     /// v4: 图片加载阶段增加 images.weserv.nl 代理 fallback，保证国内网络也能正常显示。
-    private static let defaultDemoHTMLVersion: Int = 4
+    /// v5: Hero 下方新增「在 TRAE CN 中编辑此页面」CTA 卡片，点击通过 `traeFlowOpenInTrae` JS Bridge
+    /// 以当前区域目录为工作区在 TRAE CN 中打开，引导用户直接修改 HTML 源文件。
+    private static let defaultDemoHTMLVersion: Int = 5
     private static let defaultDemoHTMLVersionKey = "traeFlowDefaultDemoHTMLVersion"
 
     /// 测试 HTML 内容 —— 演示三个真实交互区块（喝水提醒 / 随机猫咪图片 / 系统数据监控）。
@@ -593,10 +607,10 @@ final class CustomAreaStore: ObservableObject {
     transition: background 0.2s, border-color 0.2s, transform 0.15s;
     animation: cardIn 0.4s ease backwards;
   }
-  .card:nth-child(2) { animation-delay: 0.05s; }
-  .card:nth-child(3) { animation-delay: 0.1s; }
-  .card:nth-child(4) { animation-delay: 0.15s; }
-  .card:nth-child(5) { animation-delay: 0.2s; }
+  .card:nth-child(3) { animation-delay: 0.05s; }
+  .card:nth-child(4) { animation-delay: 0.1s; }
+  .card:nth-child(5) { animation-delay: 0.15s; }
+  .card:nth-child(6) { animation-delay: 0.2s; }
   @keyframes cardIn {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
@@ -778,9 +792,57 @@ final class CustomAreaStore: ObservableObject {
   .metric-fill.mem { background: linear-gradient(90deg, #4dd0e1, #26c6da); }
   .metric-sub { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; font-variant-numeric: tabular-nums; }
   .metric-pending { opacity: 0.4; }
+
+  /* ===== Edit CTA ===== */
+  .edit-cta {
+    margin-bottom: 12px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(191,90,242,0.12), rgba(10,132,255,0.08));
+    border: 1px solid rgba(191,90,242,0.28);
+    display: flex; align-items: center; gap: 12px;
+    animation: cardIn 0.4s ease backwards;
+    animation-delay: 0s;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .edit-cta:hover { border-color: rgba(191,90,242,0.45); background: linear-gradient(135deg, rgba(191,90,242,0.18), rgba(10,132,255,0.12)); }
+  .edit-cta-icon {
+    width: 30px; height: 30px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 3px 10px rgba(191,90,242,0.3);
+  }
+  .edit-cta-icon svg { width: 16px; height: 16px; fill: #fff; }
+  .edit-cta-text { flex: 1; min-width: 0; }
+  .edit-cta-title { font-size: 12px; font-weight: 600; color: #fff; }
+  .edit-cta-desc { font-size: 10px; color: var(--text-secondary); margin-top: 2px; line-height: 1.45; }
+  .edit-cta button {
+    flex-shrink: 0;
+    background: rgba(191,90,242,0.28);
+    border-color: rgba(191,90,242,0.5);
+  }
+  .edit-cta button:hover {
+    background: rgba(191,90,242,0.42);
+    box-shadow: 0 2px 12px rgba(191,90,242,0.3);
+  }
 </style>
 </head>
 <body>
+
+  <!-- 编辑入口：在 TRAE CN 中打开当前区域目录直接编辑此 HTML -->
+  <div class="edit-cta">
+    <div class="edit-cta-icon">
+      <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+    </div>
+    <div class="edit-cta-text">
+      <div class="edit-cta-title">想要快速实现自定义功能？</div>
+      <div class="edit-cta-desc">点击右侧按钮打开 TRAE，输入你的功能需求即可一键生成，保存完成就能直接预览效果。</div>
+    </div>
+    <button onclick="openInTraeCN()">去 TRAE 编辑</button>
+  </div>
+
   <!-- Hero Header -->
   <div class="hero">
     <div class="hero-row">
@@ -794,6 +856,8 @@ final class CustomAreaStore: ObservableObject {
       <div class="hero-badge">LIVE</div>
     </div>
   </div>
+
+
 
   <!-- 区块 1: 喝水提醒（计数 + Flow 岛推送，集成）-->
   <div class="card">
@@ -1110,6 +1174,17 @@ final class CustomAreaStore: ObservableObject {
   }
   requestMetrics();
   setInterval(requestMetrics, 2000);
+
+  // ===== 编辑入口：在 TRAE CN 中打开当前区域目录 =====
+  // 通过 traeFlowOpenInTrae JS Bridge 触发，由 CustomAreaWebView.Coordinator 调用
+  // TraeSessionLauncher.openWorkspace(.traeCN, directoryURL:) 在 TRAE CN 中打开编辑。
+  function openInTraeCN() {
+    try {
+      window.webkit.messageHandlers.traeFlowOpenInTrae.postMessage({ variant: "trae-cn" });
+    } catch (e) {
+      document.title = "bridge-error: " + e.message;
+    }
+  }
 </script>
 </body>
 </html>

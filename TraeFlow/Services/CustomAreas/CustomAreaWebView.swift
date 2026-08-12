@@ -15,16 +15,19 @@ struct CustomAreaWebView: NSViewRepresentable {
     static let metricsMessageHandlerName = "traeFlowMetrics"
     /// JS Bridge 收起展开面板处理器 —— HTML 端通过 `window.webkit.messageHandlers.traeFlowCollapse.postMessage(...)` 收起 Flow 岛展开面板
     static let collapseMessageHandlerName = "traeFlowCollapse"
+    /// JS Bridge 在 TRAE 中打开编辑处理器 —— HTML 端通过 `window.webkit.messageHandlers.traeFlowOpenInTrae.postMessage(...)`
+    /// 触发以当前自定义区域目录为工作区在指定 TRAE 变体（默认 TRAE CN）中打开，便于用户直接编辑 HTML 源文件。
+    static let openInTraeMessageHandlerName = "traeFlowOpenInTrae"
 
     /// Spec: network-block-injection —— 当 `allowsNetworkAccess == false` 时注入的 JS 脚本，
     /// 拦截 `window.fetch` 与 `XMLHttpRequest`，使其立即 reject（抛出 "网络访问已被禁用" 错误）。
     /// 原因：fetch/XHR 不触发 `decidePolicyFor navigationAction`，仅靠 navigation delegate
     /// 无法拦截 JS 发起的网络请求；必须在 atDocumentStart 注入脚本从源头阻断。
-    /// 保留 `traeFlowMetrics` / `traeFlowHint` / `traeFlowCollapse` 消息通道（用于 JS Bridge）。
+    /// 保留 `traeFlowMetrics` / `traeFlowHint` / `traeFlowCollapse` / `traeFlowOpenInTrae` 消息通道（用于 JS Bridge）。
     static let networkBlockScript = """
     (function () {
       var blockedMsg = "网络访问已被禁用（未开启允许请求外部接口）";
-      var allowedHosts = ["messageHandlers.traeFlowHint", "messageHandlers.traeFlowMetrics", "messageHandlers.traeFlowCollapse"];
+      var allowedHosts = ["messageHandlers.traeFlowHint", "messageHandlers.traeFlowMetrics", "messageHandlers.traeFlowCollapse", "messageHandlers.traeFlowOpenInTrae"];
       function isAllowed(url) {
         try {
           var u = new URL(url, location.href);
@@ -269,6 +272,8 @@ struct CustomAreaWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: Self.metricsMessageHandlerName)
         // Spec: 注册 JS Bridge —— 收起 Flow 岛展开面板通道（HTML 通过 postMessage 触发收起）
         configuration.userContentController.add(context.coordinator, name: Self.collapseMessageHandlerName)
+        // Spec: 注册 JS Bridge —— 在 TRAE 中打开编辑通道（HTML 通过 postMessage 触发，以当前区域目录为工作区打开 TRAE CN）
+        configuration.userContentController.add(context.coordinator, name: Self.openInTraeMessageHandlerName)
 
         // Spec: mineradio-bridge-compat-layer —— 注入 Bridge user script + 注册 message handler
         if source.isMineradio {
@@ -359,6 +364,7 @@ struct CustomAreaWebView: NSViewRepresentable {
         controller.removeScriptMessageHandler(forName: Self.hintMessageHandlerName)
         controller.removeScriptMessageHandler(forName: Self.metricsMessageHandlerName)
         controller.removeScriptMessageHandler(forName: Self.collapseMessageHandlerName)
+        controller.removeScriptMessageHandler(forName: Self.openInTraeMessageHandlerName)
         if source.isMineradio {
             controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.apiMessageHandlerName)
             controller.removeScriptMessageHandler(forName: MineradioBridgeUserScript.binaryMessageHandlerName)
@@ -368,6 +374,7 @@ struct CustomAreaWebView: NSViewRepresentable {
         controller.add(context.coordinator, name: Self.hintMessageHandlerName)
         controller.add(context.coordinator, name: Self.metricsMessageHandlerName)
         controller.add(context.coordinator, name: Self.collapseMessageHandlerName)
+        controller.add(context.coordinator, name: Self.openInTraeMessageHandlerName)
         if source.isMineradio {
             controller.add(context.coordinator, name: MineradioBridgeUserScript.apiMessageHandlerName)
             controller.add(context.coordinator, name: MineradioBridgeUserScript.binaryMessageHandlerName)
@@ -703,6 +710,13 @@ struct CustomAreaWebView: NSViewRepresentable {
                 return
             }
 
+            // Spec: 在 TRAE 中打开编辑 —— HTML 通过 traeFlowOpenInTrae.postMessage 触发，
+            // 以当前区域目录为工作区在指定 TRAE 变体（默认 TRAE CN）中打开，便于直接编辑 HTML 源文件。
+            if message.name == CustomAreaWebView.openInTraeMessageHandlerName {
+                handleOpenInTrae(message.body)
+                return
+            }
+
             guard message.name == CustomAreaWebView.hintMessageHandlerName else {
                 return
             }
@@ -748,6 +762,33 @@ struct CustomAreaWebView: NSViewRepresentable {
             guard let webView = webView else { return }
             let json = SystemMetricsProvider.shared.sampleAsJSON()
             webView.evaluateJavaScript("if (window.receiveMetrics) { window.receiveMetrics(\(json)); }")
+        }
+
+        // MARK: - JS Bridge: traeFlowOpenInTrae
+
+        /// Spec: 响应 `traeFlowOpenInTrae` —— 以当前区域目录为工作区在 TRAE 变体中打开编辑。
+        /// 消息体（可选 JSON）：`{ "variant": "trae-cn" }`，`variant` 默认 `"trae-cn"`，
+        /// 取值见 `TraeVariant.urlScheme`（trae / trae-cn / trae-work / trae-work-cn），
+        /// 未识别值回退到 `trae-cn`。仅 `.localArea` 源有效（远程 URL / mineradio 无本地目录），
+        /// 找不到当前区域时静默忽略并打日志。
+        private func handleOpenInTrae(_ body: Any) {
+            guard let areaID = currentAreaID,
+                  let area = CustomAreaStore.shared.areas.first(where: { $0.id == areaID }) else {
+                NSLog("[traeFlowOpenInTrae] 找不到当前区域（currentAreaID=\(currentAreaID ?? "nil")），忽略")
+                return
+            }
+            var variant: TraeVariant = .traeCN
+            if let dict = body as? [String: Any], let v = dict["variant"] as? String {
+                switch v {
+                case "trae": variant = .trae
+                case "trae-cn": variant = .traeCN
+                case "trae-work": variant = .traeWork
+                case "trae-work-cn": variant = .traeWorkCN
+                default: break
+                }
+            }
+            NSLog("[traeFlowOpenInTrae] 在 \(variant.displayName) 中打开编辑：\(area.directoryURL.path)")
+            TraeSessionLauncher.openWorkspace(variant, directoryURL: area.directoryURL)
         }
     }
 }

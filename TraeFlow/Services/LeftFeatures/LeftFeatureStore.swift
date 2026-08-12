@@ -482,12 +482,20 @@ final class LeftFeatureStore: ObservableObject {
     /// `iconName` 同步自 `CustomArea.iconName`，使 `FeatureIconView(feature:)` 能正确渲染
     /// 文字 / 图片图标（与 webURL / builtin 一致），否则会回退到 kind 默认 SF Symbol。
     /// Spec: 自定义区域插入到末尾内置功能（NewsNow / Mineradio）之前。
-    func appendCustomAreaFeature(areaID: String, isEnabled: Bool = true, iconName: String? = nil) {
+    func appendCustomAreaFeature(
+        areaID: String,
+        isEnabled: Bool = true,
+        iconName: String? = nil,
+        expandedWidth: Double? = nil,
+        expandedHeight: Double? = nil
+    ) {
         features.append(LeftFeature(
             kind: .customArea(areaID: areaID),
             isEnabled: isEnabled,
             sortOrder: nextUserFeatureSortOrder(),
-            customIconName: iconName
+            customIconName: iconName,
+            expandedWidth: expandedWidth,
+            expandedHeight: expandedHeight
         ))
         persist()
     }
@@ -683,6 +691,24 @@ final class LeftFeatureStore: ObservableObject {
         features[index].expandedWidth = width
         features[index].expandedHeight = height
         persist()
+    }
+
+    /// Spec: demo-preset-default-expanded-size —— 仅当目标功能当前 `expandedWidth` / `expandedHeight`
+    /// 均为 nil（即用户未手动拖拽过尺寸）时，回填默认展开尺寸。已自定义尺寸的功能不受影响。
+    /// 用于演示页模板升级时把新的默认尺寸送达老用户，不覆盖用户的手动调整。
+    @discardableResult
+    func backfillExpandedSizeIfNil(areaID: String, width: Double, height: Double) -> Bool {
+        guard let index = features.firstIndex(where: {
+            if case .customArea(let id) = $0.kind { return id == areaID }
+            return false
+        }) else { return false }
+        guard features[index].expandedWidth == nil, features[index].expandedHeight == nil else {
+            return false
+        }
+        features[index].expandedWidth = width
+        features[index].expandedHeight = height
+        persist()
+        return true
     }
 
     /// 设置功能的「展开即固定」开关；true = 切换到该功能时面板自动 pin
